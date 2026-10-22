@@ -1,0 +1,39 @@
+[package]
+name = "mcset"
+version = "0.1.0"
+description = "Cross-Platform Minecraft Server Management Platform"
+authors = ["Antigravity"]
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+name = "mcset_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+rfd = "0.15"
+tauri = { version = "2.2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+sha1 = "0.10"
+url = "2.5"
+hex = "0.4"
+zip = { version = "2.2", default-features = false, features = ["deflate", "time"] }
+regex = "1.11"
+thiserror = "2.0"
+anyhow = "1.0"
+dirs = "6.0"
+walkdir = "2.5"
+futures-util = "0.3"
+log = "0.4"
+tauri-plugin-log = "2"
