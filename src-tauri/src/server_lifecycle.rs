@@ -1,13 +1,13 @@
+use crate::models::{ServerProfile, ServerStatus, ServerStatusState};
+use crate::security::SecurityPolicy;
+use anyhow::{Result, anyhow};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use anyhow::{anyhow, Result};
 use tauri::{AppHandle, Emitter};
-use crate::models::{ServerProfile, ServerStatus, ServerStatusState};
-use crate::security::SecurityPolicy;
 
 pub struct RunningProcess {
     pub child: Child,
@@ -75,11 +75,7 @@ impl ServerLifecycleManager {
     }
 
     /// Starts a Minecraft server process
-    pub fn start_server(
-        &self,
-        app: AppHandle,
-        profile: &ServerProfile,
-    ) -> Result<()> {
+    pub fn start_server(&self, app: AppHandle, profile: &ServerProfile) -> Result<()> {
         let mut procs = self.processes.lock().unwrap();
 
         // Check if any existing process record has already terminated/crashed, and clean it up
@@ -94,7 +90,8 @@ impl ServerLifecycleManager {
                 should_remove = true;
             } else {
                 let st = proc.status.read().unwrap();
-                if st.state == ServerStatusState::Crashed || st.state == ServerStatusState::Stopped {
+                if st.state == ServerStatusState::Crashed || st.state == ServerStatusState::Stopped
+                {
                     let _ = proc.child.kill();
                     should_remove = true;
                 } else {
@@ -111,7 +108,8 @@ impl ServerLifecycleManager {
             procs.remove(&profile.id);
         }
 
-        let clean_server_dir = profile.server_dir
+        let clean_server_dir = profile
+            .server_dir
             .strip_prefix(r"\\?\")
             .unwrap_or(&profile.server_dir);
         let server_dir = PathBuf::from(clean_server_dir);
@@ -142,7 +140,62 @@ impl ServerLifecycleManager {
             .to_string();
 
         // Determine jar path / startup script
-        let jar_path = server_dir.join(&profile.jar_file);
+        let mut active_target = profile.jar_file.clone();
+        let mut jar_path = server_dir.join(&active_target);
+
+        if !jar_path.exists() {
+            // Check for modern Forge / NeoForge launch script or generated server jar
+            #[cfg(target_os = "windows")]
+            let script_name = "run.bat";
+            #[cfg(not(target_os = "windows"))]
+            let script_name = "run.sh";
+
+            let script_path = server_dir.join(script_name);
+            if script_path.exists() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(&script_path) {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(0o755);
+                        let _ = std::fs::set_permissions(&script_path, perms);
+                    }
+                }
+                active_target = script_name.to_string();
+                jar_path = script_path;
+            } else if server_dir.join("run.bat").exists() {
+                active_target = "run.bat".to_string();
+                jar_path = server_dir.join("run.bat");
+            } else if server_dir.join("run.sh").exists() {
+                let run_sh = server_dir.join("run.sh");
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(&run_sh) {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(0o755);
+                        let _ = std::fs::set_permissions(&run_sh, perms);
+                    }
+                }
+                active_target = "run.sh".to_string();
+                jar_path = run_sh;
+            } else if let Ok(entries) = std::fs::read_dir(&server_dir) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file() && p.extension().map(|e| e == "jar").unwrap_or(false) {
+                        let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        if (name.contains("forge") || name.contains("neoforge") || name.contains("server"))
+                            && !name.ends_with("-installer.jar")
+                        {
+                            active_target = name;
+                            jar_path = p;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         if !jar_path.exists() {
             return Err(anyhow!(
                 "Server launch target not found at: {:?}. Please install a server jar or launch script into the server directory.",
@@ -152,7 +205,10 @@ impl ServerLifecycleManager {
 
         // For Forge / NeoForge, ensure user_jvm_args.txt has the configured memory settings
         let user_jvm_args_path = server_dir.join("user_jvm_args.txt");
-        if user_jvm_args_path.exists() || profile.jar_file.ends_with(".bat") || profile.jar_file.ends_with(".sh") {
+        if user_jvm_args_path.exists()
+            || active_target.ends_with(".bat")
+            || active_target.ends_with(".sh")
+        {
             let user_jvm_content = format!(
                 "# Generated by MCSet\n-Xms{}M\n-Xmx{}M\n{}\n",
                 profile.min_ram_mb,
@@ -162,29 +218,33 @@ impl ServerLifecycleManager {
             let _ = std::fs::write(&user_jvm_args_path, user_jvm_content);
         }
 
-        let is_batch = profile.jar_file.ends_with(".bat") || profile.jar_file.ends_with(".cmd");
-        let is_sh = profile.jar_file.ends_with(".sh");
+        let is_batch = active_target.ends_with(".bat") || active_target.ends_with(".cmd");
+        let is_sh = active_target.ends_with(".sh");
 
         let mut cmd = if is_batch {
             #[cfg(target_os = "windows")]
             {
                 let mut c = Command::new("cmd.exe");
                 c.current_dir(&server_dir);
-                c.args(["/c", &profile.jar_file, "nogui"]);
+                c.args(["/c", &active_target, "nogui"]);
                 c
             }
             #[cfg(not(target_os = "windows"))]
             {
                 let mut c = Command::new("sh");
                 c.current_dir(&server_dir);
-                let sh_target = if server_dir.join("run.sh").exists() { "run.sh" } else { &profile.jar_file };
+                let sh_target = if server_dir.join("run.sh").exists() {
+                    "run.sh"
+                } else {
+                    &active_target
+                };
                 c.args([sh_target, "nogui"]);
                 c
             }
         } else if is_sh {
             let mut c = Command::new("sh");
             c.current_dir(&server_dir);
-            c.args([&profile.jar_file, "nogui"]);
+            c.args([&active_target, "nogui"]);
             c
         } else {
             let mut cmd = Command::new(&java_binary);
@@ -200,10 +260,24 @@ impl ServerLifecycleManager {
             }
 
             cmd.arg("-jar");
-            cmd.arg(&profile.jar_file);
+            cmd.arg(&active_target);
             cmd.arg("nogui");
             cmd
         };
+
+        // Prepend Java runtime directory to PATH and set JAVA_HOME so run scripts use the exact matching Java
+        if let Some(java_parent) = std::path::Path::new(&java_binary).parent() {
+            let current_path = std::env::var("PATH").unwrap_or_default();
+            #[cfg(target_os = "windows")]
+            let new_path = format!("{};{}", java_parent.display(), current_path);
+            #[cfg(not(target_os = "windows"))]
+            let new_path = format!("{}:{}", java_parent.display(), current_path);
+
+            cmd.env("PATH", new_path);
+            if let Some(java_home) = java_parent.parent() {
+                cmd.env("JAVA_HOME", java_home);
+            }
+        }
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
@@ -235,9 +309,18 @@ impl ServerLifecycleManager {
         crate::process_guard::guard_child_process(&child);
 
         let pid = child.id();
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("Failed to open child stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to open child stdout"))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow!("Failed to open child stderr"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open child stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open child stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open child stderr"))?;
 
         let status = Arc::new(RwLock::new(ServerStatus {
             state: ServerStatusState::Starting,
@@ -274,18 +357,29 @@ impl ServerLifecycleManager {
                     if lower.contains("done (") && lower.contains("for help, type") {
                         let mut st = status_clone.write().unwrap();
                         st.state = ServerStatusState::Running;
-                    } else if lower.contains("failed to bind to port") || lower.contains("address already in use") {
+                    } else if lower.contains("failed to bind to port")
+                        || lower.contains("address already in use")
+                    {
                         let mut st = status_clone.write().unwrap();
                         st.state = ServerStatusState::Crashed;
-                        st.error_message = Some("Port conflict: Another application is already using this port.".to_string());
-                    } else if lower.contains("has been compiled by a more recent version of the java runtime") {
+                        st.error_message = Some(
+                            "Port conflict: Another application is already using this port."
+                                .to_string(),
+                        );
+                    } else if lower
+                        .contains("has been compiled by a more recent version of the java runtime")
+                    {
                         let mut st = status_clone.write().unwrap();
                         st.state = ServerStatusState::Crashed;
                         st.error_message = Some("Java version incompatibility: Server jar requires a newer Java version.".to_string());
-                    } else if lower.contains("outofmemoryerror") || lower.contains("could not reserve enough space") {
+                    } else if lower.contains("outofmemoryerror")
+                        || lower.contains("could not reserve enough space")
+                    {
                         let mut st = status_clone.write().unwrap();
                         st.state = ServerStatusState::Crashed;
-                        st.error_message = Some("Out of Memory: The server exceeded allocated JVM RAM.".to_string());
+                        st.error_message = Some(
+                            "Out of Memory: The server exceeded allocated JVM RAM.".to_string(),
+                        );
                     }
 
                     // Append to log buffer (deduplicate identical consecutive mirrored line)
@@ -469,6 +563,12 @@ impl ServerLifecycleManager {
         self.start_server(app, profile)
     }
 
+    /// Gets list of currently running server IDs
+    pub fn get_running_server_ids(&self) -> Vec<String> {
+        let procs = self.processes.lock().unwrap();
+        procs.keys().cloned().collect()
+    }
+
     /// Stops all running servers cleanly for application shutdown
     pub fn stop_all(&self) {
         let mut procs = self.processes.lock().unwrap();
@@ -476,7 +576,10 @@ impl ServerLifecycleManager {
             return;
         }
 
-        log::info!("Terminating {} running server(s) for application shutdown", procs.len());
+        log::info!(
+            "Terminating {} running server(s) for application shutdown",
+            procs.len()
+        );
 
         // Step 1: Send "stop" command to all active servers
         for (_id, proc) in procs.iter_mut() {

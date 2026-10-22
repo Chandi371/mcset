@@ -14,15 +14,15 @@ pub mod security;
 pub mod server_lifecycle;
 pub mod software_manager;
 
-use std::sync::Arc;
-use tauri::Manager;
+use ai_agent::AiAgent;
 use commands::AppState;
 use database::Database;
 use mcp_tools::McpToolEngine;
 use portal_manager::PortalManager;
 use server_lifecycle::ServerLifecycleManager;
-use ai_agent::AiAgent;
 use software_manager::SoftwareProviderManager;
+use std::sync::Arc;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -104,11 +104,42 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if let Some(state) = window.try_state::<AppState>() {
-                    log::info!("Window close requested - stopping all servers and tunnels");
-                    state.lifecycle.stop_all();
-                    state.portal_manager.stop_all();
+                    let running_servers = state.lifecycle.get_running_server_ids();
+                    let running_tunnels = state.portal_manager.get_running_tunnel_ids();
+
+                    if !running_servers.is_empty() || !running_tunnels.is_empty() {
+                        // Prevent window from closing abruptly and shutting down running processes
+                        api.prevent_close();
+
+                        let mut server_names = Vec::new();
+                        for s_id in &running_servers {
+                            if let Ok(Some(server)) = state.db.get_server(s_id) {
+                                server_names.push(server.name);
+                            } else {
+                                server_names.push(s_id.clone());
+                            }
+                        }
+
+                        let payload = serde_json::json!({
+                            "running_servers": server_names,
+                            "running_server_ids": running_servers,
+                            "running_tunnels": running_tunnels,
+                            "count": server_names.len() + running_tunnels.len(),
+                        });
+
+                        log::info!(
+                            "[Shutdown] Window close intercepted with running servers: {:?}",
+                            server_names
+                        );
+                        use tauri::Emitter;
+                        let _ = window.emit("app-close-requested", &payload);
+                    } else {
+                        log::info!(
+                            "[Shutdown] Clean application exit (no active servers or tunnels)"
+                        );
+                    }
                 }
             }
         })
@@ -163,6 +194,7 @@ pub fn run() {
             commands::approve_console_command,
             commands::reject_console_command,
             commands::list_pending_approvals,
+            commands::confirm_app_shutdown,
             commands::search_modpacks,
             commands::get_modpack_versions,
             commands::install_modpack_server,
@@ -190,16 +222,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app_handle, event| {
-        match event {
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
-                if let Some(state) = app_handle.try_state::<AppState>() {
-                    log::info!("Application exiting - stopping all servers and tunnels");
-                    state.lifecycle.stop_all();
-                    state.portal_manager.stop_all();
-                }
+    app.run(|app_handle, event| match event {
+        tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                log::info!("Application exiting - stopping all servers and tunnels");
+                state.lifecycle.stop_all();
+                state.portal_manager.stop_all();
             }
-            _ => {}
         }
+        _ => {}
     });
 }

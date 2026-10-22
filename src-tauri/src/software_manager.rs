@@ -1,14 +1,12 @@
-use std::path::{Path, PathBuf};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter};
 
-use crate::models::{
-    DownloadProgressPayload, ProviderBuildInfo, ServerType, VersionManifest,
-};
+use crate::models::{DownloadProgressPayload, ProviderBuildInfo, ServerType, VersionManifest};
 use crate::security::SecurityPolicy;
 
 pub const MOJANG_MANIFEST_URL: &str =
@@ -60,10 +58,14 @@ impl SoftwareProviderManager {
                 Ok(manifest)
             }
             Err(e) => {
-                log::warn!("Failed to fetch live version manifest: {}. Checking cache...", e);
+                log::warn!(
+                    "Failed to fetch live version manifest: {}. Checking cache...",
+                    e
+                );
                 if cache_file.exists() {
                     if let Ok(content) = std::fs::read_to_string(&cache_file) {
-                        if let Ok(mut manifest) = serde_json::from_str::<VersionManifest>(&content) {
+                        if let Ok(mut manifest) = serde_json::from_str::<VersionManifest>(&content)
+                        {
                             manifest.is_stale = Some(true);
                             return Ok(manifest);
                         }
@@ -105,18 +107,21 @@ impl SoftwareProviderManager {
             ServerType::NeoForge => self.resolve_neoforge_build(mc_version).await,
             ServerType::Forge => self.resolve_forge_build(mc_version).await,
             ServerType::Quilt => self.resolve_quilt_build(mc_version).await,
-            ServerType::Spigot | ServerType::Arclight => {
-                Err(anyhow!(
-                    "Provider {:?} does not offer direct automated downloads; please choose Paper, Vanilla, Fabric, NeoForge, Forge, or Quilt.",
-                    provider
-                ))
-            }
+            ServerType::Spigot | ServerType::Arclight => Err(anyhow!(
+                "Provider {:?} does not offer direct automated downloads; please choose Paper, Vanilla, Fabric, NeoForge, Forge, or Quilt.",
+                provider
+            )),
         }
     }
 
     /// Fetches version package JSON from cache or Mojang API, caching it to disk for offline performance.
-    pub async fn get_version_package_metadata(&self, mc_version: &str) -> Result<serde_json::Value> {
-        let cache_file = self.cache_dir.join(format!("version_meta_{}.json", mc_version));
+    pub async fn get_version_package_metadata(
+        &self,
+        mc_version: &str,
+    ) -> Result<serde_json::Value> {
+        let cache_file = self
+            .cache_dir
+            .join(format!("version_meta_{}.json", mc_version));
         if cache_file.exists() {
             if let Ok(content) = std::fs::read_to_string(&cache_file) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -130,7 +135,12 @@ impl SoftwareProviderManager {
             .versions
             .iter()
             .find(|v| v.id == mc_version)
-            .ok_or_else(|| anyhow!("Minecraft version '{}' not found in official manifest", mc_version))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "Minecraft version '{}' not found in official manifest",
+                    mc_version
+                )
+            })?;
 
         SecurityPolicy::validate_download_url(&entry.url)?;
 
@@ -143,7 +153,10 @@ impl SoftwareProviderManager {
 
         let meta_json: serde_json::Value = resp.json().await?;
         let _ = std::fs::create_dir_all(&self.cache_dir);
-        let _ = std::fs::write(&cache_file, serde_json::to_string(&meta_json).unwrap_or_default());
+        let _ = std::fs::write(
+            &cache_file,
+            serde_json::to_string(&meta_json).unwrap_or_default(),
+        );
 
         Ok(meta_json)
     }
@@ -229,7 +242,9 @@ impl SoftwareProviderManager {
             .await
             .map_err(|e| anyhow!("Failed to query PaperMC builds: {}", e))?;
 
-        if resp.status() == reqwest::StatusCode::NOT_FOUND || resp.status() == reqwest::StatusCode::GONE {
+        if resp.status() == reqwest::StatusCode::NOT_FOUND
+            || resp.status() == reqwest::StatusCode::GONE
+        {
             return Err(anyhow!(
                 "Paper does not offer builds for Minecraft {}. Please choose a supported version or another software provider.",
                 mc_version
@@ -240,7 +255,10 @@ impl SoftwareProviderManager {
         let builds: Vec<serde_json::Value> = resp.json().await?;
 
         if builds.is_empty() {
-            return Err(anyhow!("No Paper builds found for Minecraft {}", mc_version));
+            return Err(anyhow!(
+                "No Paper builds found for Minecraft {}",
+                mc_version
+            ));
         }
 
         // Prefer latest STABLE build, otherwise latest available
@@ -370,12 +388,7 @@ impl SoftwareProviderManager {
     pub async fn resolve_neoforge_build(&self, mc_version: &str) -> Result<ProviderBuildInfo> {
         let meta_url =
             "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge";
-        let resp = self
-            .client
-            .get(meta_url)
-            .send()
-            .await?
-            .error_for_status()?;
+        let resp = self.client.get(meta_url).send().await?.error_for_status()?;
 
         let json: serde_json::Value = resp.json().await?;
         let versions: Vec<String> = json
@@ -550,7 +563,11 @@ impl SoftwareProviderManager {
 
         let total_size = resp.content_length().or(build_info.file_size);
         let mut file = std::fs::File::create(&temp_file_path).map_err(|e| {
-            anyhow!("Failed to create temporary download file {:?}: {}", temp_file_path, e)
+            anyhow!(
+                "Failed to create temporary download file {:?}: {}",
+                temp_file_path,
+                e
+            )
         })?;
 
         let mut downloaded_bytes: u64 = 0;
@@ -605,10 +622,9 @@ impl SoftwareProviderManager {
             "Verifying downloaded file checksum...".to_string(),
         );
 
-        if let (Some(ctype), Some(expected)) = (
-            &build_info.checksum_type,
-            &build_info.checksum_value,
-        ) {
+        if let (Some(ctype), Some(expected)) =
+            (&build_info.checksum_type, &build_info.checksum_value)
+        {
             let actual = match ctype.as_str() {
                 "sha1" => hex::encode(sha1_hasher.finalize()),
                 "sha256" => hex::encode(sha256_hasher.finalize()),
@@ -621,7 +637,14 @@ impl SoftwareProviderManager {
                     "Checksum mismatch! Expected {} '{}', but got '{}'. The downloaded file was deleted for safety.",
                     ctype, expected, actual
                 );
-                self.emit_progress(app, "error", None, downloaded_bytes, total_size, err_msg.clone());
+                self.emit_progress(
+                    app,
+                    "error",
+                    None,
+                    downloaded_bytes,
+                    total_size,
+                    err_msg.clone(),
+                );
                 return Err(anyhow!(err_msg));
             }
         }
@@ -682,13 +705,74 @@ impl SoftwareProviderManager {
 
             // Verify expected target jar exists
             let target_jar_path = server_dir.join(&build_info.target_jar);
-            if !target_jar_path.exists() {
-                // If forge/neoforge generated run.bat/run.sh or libraries, link or rename
-                log::warn!(
-                    "Target jar {:?} not found directly after installer, checking server files...",
-                    target_jar_path
-                );
+            let mut resolved_target = target_jar_path.clone();
+
+            if !resolved_target.exists() {
+                // If Forge / NeoForge generated run.bat / run.sh or libraries, adapt to the generated launch target
+                #[cfg(target_os = "windows")]
+                let script_name = "run.bat";
+                #[cfg(not(target_os = "windows"))]
+                let script_name = "run.sh";
+
+                let script_path = server_dir.join(script_name);
+                if script_path.exists() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = std::fs::metadata(&script_path) {
+                            let mut perms = meta.permissions();
+                            perms.set_mode(0o755);
+                            let _ = std::fs::set_permissions(&script_path, perms);
+                        }
+                    }
+                    resolved_target = script_path;
+                } else if server_dir.join("run.bat").exists() {
+                    resolved_target = server_dir.join("run.bat");
+                } else if server_dir.join("run.sh").exists() {
+                    let run_sh = server_dir.join("run.sh");
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = std::fs::metadata(&run_sh) {
+                            let mut perms = meta.permissions();
+                            perms.set_mode(0o755);
+                            let _ = std::fs::set_permissions(&run_sh, perms);
+                        }
+                    }
+                    resolved_target = run_sh;
+                } else if let Ok(entries) = std::fs::read_dir(server_dir) {
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_file() && p.extension().map(|e| e == "jar").unwrap_or(false) {
+                            let name = p.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            if (name.contains("forge") || name.contains("neoforge") || name.contains("server"))
+                                && !name.ends_with("-installer.jar")
+                            {
+                                if std::fs::copy(&p, &target_jar_path).is_ok() {
+                                    resolved_target = target_jar_path.clone();
+                                } else {
+                                    resolved_target = p;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
             }
+
+            self.emit_progress(
+                app,
+                "ready",
+                Some(100.0),
+                downloaded_bytes,
+                total_size,
+                format!(
+                    "Server software ready: {}",
+                    resolved_target.file_name().unwrap_or_default().to_string_lossy()
+                ),
+            );
+
+            return Ok(resolved_target);
         }
 
         self.emit_progress(
@@ -783,7 +867,11 @@ mod tests {
         assert_eq!(manifest.versions.len(), 4);
 
         // Verify categories exist
-        let types: Vec<&str> = manifest.versions.iter().map(|v| v.version_type.as_str()).collect();
+        let types: Vec<&str> = manifest
+            .versions
+            .iter()
+            .map(|v| v.version_type.as_str())
+            .collect();
         assert!(types.contains(&"snapshot"));
         assert!(types.contains(&"release"));
         assert!(types.contains(&"old_alpha"));
@@ -815,9 +903,16 @@ mod tests {
         let server_dl = meta.get("downloads").and_then(|d| d.get("server")).unwrap();
         let url = server_dl.get("url").and_then(|u| u.as_str()).unwrap();
         let sha1 = server_dl.get("sha1").and_then(|s| s.as_str()).unwrap();
-        let java_major = meta.get("javaVersion").and_then(|j| j.get("majorVersion")).and_then(|m| m.as_u64()).unwrap();
+        let java_major = meta
+            .get("javaVersion")
+            .and_then(|j| j.get("majorVersion"))
+            .and_then(|m| m.as_u64())
+            .unwrap();
 
-        assert_eq!(url, "https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar");
+        assert_eq!(
+            url,
+            "https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar"
+        );
         assert_eq!(sha1, "33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c");
         assert_eq!(java_major, 25);
     }
@@ -844,7 +939,7 @@ mod tests {
     #[test]
     fn test_checksum_verification_sha1_and_sha256() {
         let content = b"hello world minecraft server jar data";
-        
+
         let mut sha1_h = sha1::Sha1::new();
         sha1_h.update(content);
         let sha1_str = hex::encode(sha1_h.finalize());
@@ -861,7 +956,8 @@ mod tests {
 
     #[test]
     fn test_offline_cache_fallback() {
-        let temp_dir = std::env::temp_dir().join(format!("mcset_test_cache_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("mcset_test_cache_{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let cache_file = temp_dir.join("version_manifest_v2.json");
 
@@ -885,7 +981,8 @@ mod tests {
         std::fs::write(&cache_file, cached_data).unwrap();
 
         // Read cache back
-        let read_cached: VersionManifest = serde_json::from_str(&std::fs::read_to_string(&cache_file).unwrap()).unwrap();
+        let read_cached: VersionManifest =
+            serde_json::from_str(&std::fs::read_to_string(&cache_file).unwrap()).unwrap();
         assert_eq!(read_cached.latest.release, "26.3");
         assert_eq!(read_cached.versions.len(), 1);
 

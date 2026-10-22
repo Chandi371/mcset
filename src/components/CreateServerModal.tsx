@@ -100,7 +100,6 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
   const [modpackPage, setModpackPage] = useState<number>(0);
   const [modpackTotalHits, setModpackTotalHits] = useState<number>(0);
   const MODPACK_PAGE_SIZE = 12;
-  const [curseforgeApiKey, setCurseforgeApiKey] = useState("");
   const [localModpackZip, setLocalModpackZip] = useState("");
 
   // Selected Modpack Project & Version
@@ -347,7 +346,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
         loader !== "all" ? loader : undefined,
         page * MODPACK_PAGE_SIZE,
         MODPACK_PAGE_SIZE,
-        curseforgeApiKey.trim() || undefined
+        undefined
       );
       setModpackProjects(resp.hits || []);
       setModpackTotalHits(resp.total_hits || 0);
@@ -377,7 +376,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
       const versions = await api.getModpackVersions(
         project.provider,
         project.id,
-        curseforgeApiKey.trim() || undefined
+        undefined
       );
       setProjectVersions(versions);
       if (versions.length > 0) {
@@ -549,7 +548,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
         online_mode: !isCracked,
         java_path: javaPath || undefined,
         jvm_flags: "-XX:+UseG1GC -XX:+ParallelRefProcEnabled",
-        curseforge_api_key: curseforgeApiKey.trim() || undefined,
+        curseforge_api_key: undefined,
         local_archive_path: localModpackZip.trim() || undefined,
       };
 
@@ -662,7 +661,10 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
           <button
             type="button"
             onClick={() => {
-              if (!loading) setMainCategory("standard");
+              if (!loading) {
+                setError(null);
+                setMainCategory("standard");
+              }
             }}
             disabled={loading}
             className={`p-3 rounded-xl border flex items-center gap-3 transition-all ${
@@ -682,14 +684,17 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
             </div>
             <div className="text-left">
               <div className="text-xs font-bold text-foreground">Vanilla &amp; Custom Server</div>
-              <div className="text-[11px] text-muted-foreground">Paper, Fabric, Purpur, Vanilla, Spigot, or ZIP import</div>
+              <div className="text-[11px] text-muted-foreground">Paper, Fabric, Purpur, NeoForge, Forge, Vanilla, or ZIP import</div>
             </div>
           </button>
 
           <button
             type="button"
             onClick={() => {
-              if (!loading) setMainCategory("modpack");
+              if (!loading) {
+                setError(null);
+                setMainCategory("modpack");
+              }
             }}
             disabled={loading}
             className={`p-3 rounded-xl border flex items-center gap-3 transition-all ${
@@ -709,7 +714,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
             </div>
             <div className="text-left">
               <div className="text-xs font-bold text-foreground">Modpack Server</div>
-              <div className="text-[11px] text-muted-foreground">Modrinth &amp; CurseForge automated 1-click installer</div>
+              <div className="text-[11px] text-muted-foreground">Modrinth 1-click installer (.mrpack &amp; local archives)</div>
             </div>
           </button>
         </div>
@@ -787,31 +792,18 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
                         setModpackPage(0);
                         fetchModpacks(0, modpackQuery, "modrinth", modpackLoaderFilter, modpackVersionFilter);
                       }}
-                      className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${
-                        modpackProvider === "modrinth"
-                          ? "bg-emerald-500 text-background shadow-md shadow-emerald-500/20"
-                          : "bg-secondary text-muted-foreground hover:text-foreground"
-                      }`}
+                      className="px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 bg-emerald-500 text-background shadow-md shadow-emerald-500/20"
                     >
                       <span>Modrinth</span>
                       <span className="text-[10px] opacity-80 font-normal">Official .mrpack</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setModpackProvider("curseforge");
-                        setModpackPage(0);
-                        fetchModpacks(0, modpackQuery, "curseforge", modpackLoaderFilter, modpackVersionFilter);
-                      }}
-                      className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${
-                        modpackProvider === "curseforge"
-                          ? "bg-emerald-500 text-background shadow-md shadow-emerald-500/20"
-                          : "bg-secondary text-muted-foreground hover:text-foreground"
-                      }`}
+                    <div
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 bg-secondary/50 text-muted-foreground/60 border border-border/50 cursor-not-allowed select-none"
+                      title="CurseForge integration is an upcoming feature"
                     >
                       <span>CurseForge</span>
-                      <span className="text-[10px] opacity-80 font-normal">Server Packs</span>
-                    </button>
+                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 font-bold border border-amber-500/20">Upcoming Feature</span>
+                    </div>
                   </div>
 
                   {/* Manual local archive import link */}
@@ -857,37 +849,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
                   </div>
                 </div>
 
-                {/* CurseForge API Key configuration callout */}
-                {modpackProvider === "curseforge" && (
-                  <div className="p-3 bg-secondary/40 border border-border rounded-xl space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-foreground">CurseForge API Access</span>
-                      <span className="text-[10px] text-muted-foreground">Optional if using direct server pack import</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="password"
-                        placeholder="Enter your CurseForge API Key ($2a$10$...)"
-                        value={curseforgeApiKey}
-                        onChange={(e) => setCurseforgeApiKey(e.target.value)}
-                        className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setModpackPage(0);
-                          fetchModpacks(0, modpackQuery, "curseforge", modpackLoaderFilter, modpackVersionFilter);
-                        }}
-                        className="px-3 py-1.5 bg-secondary hover:bg-secondary/80 text-foreground border border-border rounded-lg font-semibold text-xs"
-                      >
-                        Apply Key
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground">
-                      CurseForge developer terms require an API key to query listings. Alternatively, you can download a modpack's official Server Pack from CurseForge.com and use <strong>Import Local Zip</strong>.
-                    </p>
-                  </div>
-                )}
+
 
                 {/* Search Bar & Filters */}
                 <div className="flex items-center gap-3">
@@ -895,7 +857,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
                     <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
                     <input
                       type="text"
-                      placeholder={`Search ${modpackProvider === "modrinth" ? "Modrinth" : "CurseForge"} modpacks (e.g. Cobblemon, All the Mods, Better MC)...`}
+                      placeholder="Search Modrinth modpacks (e.g. Cobblemon, All the Mods, Better MC)..."
                       value={modpackQuery}
                       onChange={(e) => setModpackQuery(e.target.value)}
                       onKeyDown={(e) => {
@@ -959,7 +921,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
                   <div className="py-16 text-center space-y-3">
                     <Loader2 className="w-8 h-8 animate-spin mx-auto text-emerald-400" />
                     <p className="text-xs text-muted-foreground font-mono">
-                      Querying {modpackProvider === "modrinth" ? "Modrinth" : "CurseForge"} index...
+                      Querying Modrinth modpack index...
                     </p>
                   </div>
                 ) : modpackProjects.length === 0 ? (
@@ -967,7 +929,7 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
                     <Package className="w-8 h-8 mx-auto text-muted-foreground opacity-50" />
                     <p className="text-xs font-semibold text-foreground">No modpacks found</p>
                     <p className="text-[11px] text-muted-foreground">
-                      Try searching with different terms or switch between Modrinth and CurseForge.
+                      Try searching with different terms or click Browse Local Pack (.mrpack / .zip).
                     </p>
                   </div>
                 ) : (
@@ -1556,15 +1518,44 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
               {/* ZIP Path input */}
               {creationMode === "zip" && (
                 <div className="pt-2 space-y-1.5 animate-in fade-in">
-                  <label className="text-[11px] font-medium text-foreground flex items-center gap-1.5">
-                    <Archive className="w-3.5 h-3.5 text-sky-400" />
-                    Path to Server ZIP Archive <span className="text-sky-400">*</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-medium text-foreground flex items-center gap-1.5">
+                      <Archive className="w-3.5 h-3.5 text-sky-400" />
+                      Server ZIP Archive <span className="text-sky-400">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={async () => {
+                        try {
+                          const file = await api.pickLocalFile({
+                            title: "Select Server ZIP Archive",
+                            filterName: "ZIP Archives (*.zip)",
+                            extensions: ["zip"],
+                            directory: false,
+                          });
+                          if (file) {
+                            setImportZipPath(file);
+                            if (!name.trim()) {
+                              const base = file.split(/[\\/]/).pop()?.replace(/\.zip$/i, "") || "";
+                              if (base) setName(base.replace(/[-_]/g, " "));
+                            }
+                          }
+                        } catch (err) {
+                          console.error("Failed to select ZIP archive:", err);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-400 hover:text-sky-300 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      Browse ZIP File...
+                    </button>
+                  </div>
                   <input
                     type="text"
                     required
                     disabled={loading}
-                    placeholder="e.g. C:\Users\Username\Downloads\MyMinecraftServer.zip"
+                    placeholder="Click 'Browse ZIP File...' or enter full path"
                     value={importZipPath}
                     onChange={(e) => setImportZipPath(e.target.value)}
                     className="w-full bg-background/80 border border-border rounded-lg px-3 py-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-sky-500"
@@ -1578,15 +1569,42 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
               {/* Existing Folder input */}
               {creationMode === "directory" && (
                 <div className="pt-2 space-y-1.5 animate-in fade-in">
-                  <label className="text-[11px] font-medium text-foreground flex items-center gap-1.5">
-                    <Folder className="w-3.5 h-3.5 text-amber-400" />
-                    Existing Server Directory Path <span className="text-amber-400">*</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-medium text-foreground flex items-center gap-1.5">
+                      <Folder className="w-3.5 h-3.5 text-amber-400" />
+                      Existing Server Directory <span className="text-amber-400">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      disabled={loading}
+                      onClick={async () => {
+                        try {
+                          const folder = await api.pickLocalFile({
+                            title: "Select Existing Minecraft Server Folder",
+                            directory: true,
+                          });
+                          if (folder) {
+                            setExistingDirPath(folder);
+                            if (!name.trim()) {
+                              const base = folder.split(/[\\/]/).pop() || "";
+                              if (base) setName(base.replace(/[-_]/g, " "));
+                            }
+                          }
+                        } catch (err) {
+                          console.error("Failed to select server folder:", err);
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-400 hover:text-amber-300 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      Browse Server Folder...
+                    </button>
+                  </div>
                   <input
                     type="text"
                     required
                     disabled={loading}
-                    placeholder="e.g. C:\Users\Username\Desktop\OldPaperServer"
+                    placeholder="Click 'Browse Server Folder...' or enter folder path"
                     value={existingDirPath}
                     onChange={(e) => setExistingDirPath(e.target.value)}
                     className="w-full bg-background/80 border border-border rounded-lg px-3 py-2 text-xs font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-amber-500"

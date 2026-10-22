@@ -1,8 +1,8 @@
+use crate::models::{BackupRecord, OperationRecord, ServerProfile, ServerType};
+use anyhow::{Result, anyhow};
+use rusqlite::{Connection, params};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use anyhow::{anyhow, Result};
-use rusqlite::{params, Connection};
-use crate::models::{BackupRecord, OperationRecord, ServerProfile, ServerType};
 
 #[derive(Clone)]
 pub struct Database {
@@ -158,7 +158,10 @@ impl Database {
     pub fn delete_server(&self, server_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM servers WHERE id = ?1", params![server_id])?;
-        conn.execute("DELETE FROM backups WHERE server_id = ?1", params![server_id])?;
+        conn.execute(
+            "DELETE FROM backups WHERE server_id = ?1",
+            params![server_id],
+        )?;
         Ok(())
     }
 
@@ -174,8 +177,8 @@ impl Database {
         let mut rows = stmt.query(params![server_id])?;
         if let Some(row) = rows.next()? {
             let type_str: String = row.get(2)?;
-            let server_type: ServerType = serde_json::from_str(&format!("\"{}\"", type_str))
-                .unwrap_or(ServerType::Paper);
+            let server_type: ServerType =
+                serde_json::from_str(&format!("\"{}\"", type_str)).unwrap_or(ServerType::Paper);
 
             Ok(Some(ServerProfile {
                 id: row.get(0)?,
@@ -210,8 +213,8 @@ impl Database {
 
         let rows = stmt.query_map([], |row| {
             let type_str: String = row.get(2)?;
-            let server_type: ServerType = serde_json::from_str(&format!("\"{}\"", type_str))
-                .unwrap_or(ServerType::Paper);
+            let server_type: ServerType =
+                serde_json::from_str(&format!("\"{}\"", type_str)).unwrap_or(ServerType::Paper);
 
             Ok(ServerProfile {
                 id: row.get(0)?,

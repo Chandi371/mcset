@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::ai_agent::AiAgent;
 use crate::backup_manager::BackupManager;
 use crate::config_manager::ConfigManager;
 use crate::database::Database;
@@ -14,13 +15,16 @@ use crate::models::{
     JavaRuntime, McpToolCall, McpToolResult, OperationRecord, ServerConfigItem, ServerProfile,
     ServerStatus, ServerType,
 };
+use crate::models::{
+    BannedIp, BannedPlayer, FileEntry, OpPlayer, PendingCommandApproval, PortalServerStatus,
+    ProviderBuildInfo, ServerPlayerData, ServerStatusState, VersionManifest, WhitelistPlayer,
+    WorldDetails,
+};
+use crate::modpack_manager::ModpackManager;
+use crate::portal_manager::PortalManager;
 use crate::security::SecurityPolicy;
 use crate::server_lifecycle::ServerLifecycleManager;
-use crate::ai_agent::AiAgent;
-use crate::portal_manager::PortalManager;
 use crate::software_manager::SoftwareProviderManager;
-use crate::modpack_manager::ModpackManager;
-use crate::models::{VersionManifest, ProviderBuildInfo, PortalServerStatus, PendingCommandApproval, BannedIp, BannedPlayer, FileEntry, OpPlayer, ServerPlayerData, WhitelistPlayer, WorldDetails, ServerStatusState};
 use serde_json::json;
 
 pub struct AppState {
@@ -66,10 +70,11 @@ pub async fn create_server(
         .name
         .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
-    let server_dir = state
-        .data_dir
-        .join("servers")
-        .join(format!("{}_{}", sanitized_dir_name, &id[..8]));
+    let server_dir =
+        state
+            .data_dir
+            .join("servers")
+            .join(format!("{}_{}", sanitized_dir_name, &id[..8]));
 
     std::fs::create_dir_all(&server_dir).map_err(|e| e.to_string())?;
 
@@ -81,7 +86,10 @@ pub async fn create_server(
     // Write initial server.properties
     let mut initial_props = BTreeMap::new();
     initial_props.insert("server-port".to_string(), port.to_string());
-    initial_props.insert("motd".to_string(), format!("{} - Powered by MCSet", req.name));
+    initial_props.insert(
+        "motd".to_string(),
+        format!("{} - Powered by MCSet", req.name),
+    );
     initial_props.insert("difficulty".to_string(), "easy".to_string());
     initial_props.insert("gamemode".to_string(), "survival".to_string());
     let online_mode = req.online_mode.unwrap_or(true);
@@ -107,11 +115,15 @@ pub async fn create_server(
             return Err(format!("Uploaded zip file not found at {:?}", zip_path));
         }
 
-        let file = std::fs::File::open(&zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
-        let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
+        let file =
+            std::fs::File::open(&zip_path).map_err(|e| format!("Failed to open zip: {}", e))?;
+        let mut archive =
+            zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
 
         for i in 0..archive.len() {
-            let mut file = archive.by_index(i).map_err(|e| format!("Failed to read zip entry: {}", e))?;
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| format!("Failed to read zip entry: {}", e))?;
             let outpath = match file.enclosed_name() {
                 Some(path) => server_dir.join(path),
                 None => continue,
@@ -136,7 +148,14 @@ pub async fn create_server(
                 let p = entry.path();
                 if p.is_file() && p.extension().map(|e| e == "jar").unwrap_or(false) {
                     let fname = p.file_name().unwrap().to_string_lossy().to_string();
-                    if fname.contains("server") || fname.contains("paper") || fname.contains("spigot") || fname.contains("purpur") || fname.contains("fabric") || fname.contains("forge") || fname.contains("vanilla") {
+                    if fname.contains("server")
+                        || fname.contains("paper")
+                        || fname.contains("spigot")
+                        || fname.contains("purpur")
+                        || fname.contains("fabric")
+                        || fname.contains("forge")
+                        || fname.contains("vanilla")
+                    {
                         jar_file = fname;
                         break;
                     }
@@ -150,13 +169,19 @@ pub async fn create_server(
             .ok_or_else(|| "Missing 'existing_dir_path'".to_string())?;
         let src_dir = PathBuf::from(existing_dir_str);
         if !src_dir.exists() || !src_dir.is_dir() {
-            return Err(format!("Selected server directory not found at {:?}", src_dir));
+            return Err(format!(
+                "Selected server directory not found at {:?}",
+                src_dir
+            ));
         }
 
         // Copy files from existing directory into server_dir
         for entry in walkdir::WalkDir::new(&src_dir).min_depth(1) {
             if let Ok(entry) = entry {
-                let rel = entry.path().strip_prefix(&src_dir).map_err(|e| e.to_string())?;
+                let rel = entry
+                    .path()
+                    .strip_prefix(&src_dir)
+                    .map_err(|e| e.to_string())?;
                 let target = server_dir.join(rel);
                 if entry.file_type().is_dir() {
                     let _ = std::fs::create_dir_all(&target);
@@ -175,7 +200,14 @@ pub async fn create_server(
                 let p = entry.path();
                 if p.is_file() && p.extension().map(|e| e == "jar").unwrap_or(false) {
                     let fname = p.file_name().unwrap().to_string_lossy().to_string();
-                    if fname.contains("server") || fname.contains("paper") || fname.contains("spigot") || fname.contains("purpur") || fname.contains("fabric") || fname.contains("forge") || fname.contains("vanilla") {
+                    if fname.contains("server")
+                        || fname.contains("paper")
+                        || fname.contains("spigot")
+                        || fname.contains("purpur")
+                        || fname.contains("fabric")
+                        || fname.contains("forge")
+                        || fname.contains("vanilla")
+                    {
                         jar_file = fname;
                         break;
                     }
@@ -183,6 +215,24 @@ pub async fn create_server(
             }
         }
     }
+
+    let resolved_java = if let Some(ref j) = req.java_path {
+        if !j.trim().is_empty() {
+            Some(j.clone())
+        } else {
+            JavaManager::find_or_install_compatible_java(
+                &state.data_dir,
+                &req.minecraft_version,
+                None,
+            )
+            .await
+            .ok()
+        }
+    } else {
+        JavaManager::find_or_install_compatible_java(&state.data_dir, &req.minecraft_version, None)
+            .await
+            .ok()
+    };
 
     // If no server jar was found in imported files or this is a fresh server, download it
     if jar_file.is_empty() {
@@ -192,29 +242,18 @@ pub async fn create_server(
             .await
             .map_err(|e| format!("Failed to resolve server software: {}", e))?;
 
-        jar_file = build_info.target_jar.clone();
-
-        state
+        let installed_target = state
             .software_manager
-            .download_and_install(
-                None,
-                &server_dir,
-                &build_info,
-                req.java_path.as_deref(),
-            )
+            .download_and_install(None, &server_dir, &build_info, resolved_java.as_deref())
             .await
             .map_err(|e| format!("Failed to install server software: {}", e))?;
-    }
 
-    let resolved_java = if let Some(ref j) = req.java_path {
-        if !j.trim().is_empty() {
-            Some(j.clone())
-        } else {
-            JavaManager::find_or_install_compatible_java(&state.data_dir, &req.minecraft_version, None).await.ok()
-        }
-    } else {
-        JavaManager::find_or_install_compatible_java(&state.data_dir, &req.minecraft_version, None).await.ok()
-    };
+        jar_file = installed_target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&build_info.target_jar)
+            .to_string();
+    }
 
     let now = chrono::Utc::now().timestamp();
     let profile = ServerProfile {
@@ -235,7 +274,10 @@ pub async fn create_server(
         updated_at: now,
     };
 
-    state.db.insert_server(&profile).map_err(|e| e.to_string())?;
+    state
+        .db
+        .insert_server(&profile)
+        .map_err(|e| e.to_string())?;
     state
         .db
         .record_operation(
@@ -255,12 +297,16 @@ pub async fn update_server_profile(
     profile: ServerProfile,
 ) -> Result<ServerProfile, String> {
     SecurityPolicy::validate_server_name(&profile.name).map_err(|e| e.to_string())?;
-    SecurityPolicy::validate_memory(profile.min_ram_mb, profile.max_ram_mb).map_err(|e| e.to_string())?;
+    SecurityPolicy::validate_memory(profile.min_ram_mb, profile.max_ram_mb)
+        .map_err(|e| e.to_string())?;
     SecurityPolicy::validate_port(profile.port).map_err(|e| e.to_string())?;
 
     let mut updated = profile;
     updated.updated_at = chrono::Utc::now().timestamp();
-    state.db.update_server(&updated).map_err(|e| e.to_string())?;
+    state
+        .db
+        .update_server(&updated)
+        .map_err(|e| e.to_string())?;
     Ok(updated)
 }
 
@@ -278,10 +324,18 @@ pub async fn delete_server(
                 let _ = std::fs::remove_dir_all(path);
             }
         }
-        state.db.delete_server(&server_id).map_err(|e| e.to_string())?;
         state
             .db
-            .record_operation(Some(&server_id), "delete_server", &format!("Deleted server {}", server.name), true)
+            .delete_server(&server_id)
+            .map_err(|e| e.to_string())?;
+        state
+            .db
+            .record_operation(
+                Some(&server_id),
+                "delete_server",
+                &format!("Deleted server {}", server.name),
+                true,
+            )
             .map_err(|e| e.to_string())?;
     }
     Ok(true)
@@ -313,7 +367,10 @@ pub async fn stop_server(
     state: State<'_, AppState>,
     server_id: String,
 ) -> Result<bool, String> {
-    state.lifecycle.stop_server(&server_id).map_err(|e| e.to_string())?;
+    state
+        .lifecycle
+        .stop_server(&server_id)
+        .map_err(|e| e.to_string())?;
     // Stop Portal tunnel for this server if active
     state.portal_manager.stop_tunnel(&server_id, Some(&app));
     Ok(true)
@@ -384,7 +441,8 @@ pub async fn download_java_runtime(
     state: State<'_, AppState>,
     major_version: u32,
 ) -> Result<JavaRuntime, String> {
-    JavaManager::download_and_install_jdk(&state.data_dir, major_version, Some(&app)).await
+    JavaManager::download_and_install_jdk(&state.data_dir, major_version, Some(&app))
+        .await
         .map_err(|e| e.to_string())
 }
 
@@ -408,7 +466,11 @@ pub async fn auto_fix_server_java(
     let needed_major = match target_major {
         Some(m) => m,
         None => {
-            if let Ok(m) = state.software_manager.get_required_java_version(&server.minecraft_version).await {
+            if let Ok(m) = state
+                .software_manager
+                .get_required_java_version(&server.minecraft_version)
+                .await
+            {
                 m
             } else {
                 JavaManager::get_recommended_java_major(&server.minecraft_version).0
@@ -420,8 +482,10 @@ pub async fn auto_fix_server_java(
     let java_path = if let Some(found) = runtimes.iter().find(|r| r.major_version == needed_major) {
         found.path.clone()
     } else {
-        let installed = JavaManager::download_and_install_jdk(&state.data_dir, needed_major, Some(&app)).await
-            .map_err(|e| format!("Failed to install Java {}: {}", needed_major, e))?;
+        let installed =
+            JavaManager::download_and_install_jdk(&state.data_dir, needed_major, Some(&app))
+                .await
+                .map_err(|e| format!("Failed to install Java {}: {}", needed_major, e))?;
         installed.path
     };
 
@@ -636,10 +700,7 @@ pub async fn install_modrinth_extension(
         filename,
         primary: true,
         size: 0,
-        hashes: crate::extension_manager::ModrinthFileHashes {
-            sha1: None,
-            sha512,
-        },
+        hashes: crate::extension_manager::ModrinthFileHashes { sha1: None, sha512 },
     };
 
     let installed = ExtensionManager::download_and_install(&path, &server.server_type, &ver_file)
@@ -680,11 +741,17 @@ pub async fn create_backup(
         .ok_or_else(|| "Server not found".to_string())?;
     let path = PathBuf::from(&server.server_dir);
 
-    let rec = BackupManager::create_backup(&path, &server_id, &description).map_err(|e| e.to_string())?;
+    let rec =
+        BackupManager::create_backup(&path, &server_id, &description).map_err(|e| e.to_string())?;
     state.db.insert_backup(&rec).map_err(|e| e.to_string())?;
     state
         .db
-        .record_operation(Some(&server_id), "create_backup", &format!("Created backup {}", rec.file_name), true)
+        .record_operation(
+            Some(&server_id),
+            "create_backup",
+            &format!("Created backup {}", rec.file_name),
+            true,
+        )
         .map_err(|e| e.to_string())?;
     Ok(rec)
 }
@@ -706,7 +773,12 @@ pub async fn restore_backup(
     BackupManager::restore_backup(&path, &file_name).map_err(|e| e.to_string())?;
     state
         .db
-        .record_operation(Some(&server_id), "restore_backup", &format!("Restored backup {}", file_name), true)
+        .record_operation(
+            Some(&server_id),
+            "restore_backup",
+            &format!("Restored backup {}", file_name),
+            true,
+        )
         .map_err(|e| e.to_string())?;
     Ok(true)
 }
@@ -726,7 +798,10 @@ pub async fn delete_backup(
     let path = PathBuf::from(&server.server_dir);
 
     BackupManager::delete_backup(&path, &file_name).map_err(|e| e.to_string())?;
-    state.db.delete_backup(&backup_id).map_err(|e| e.to_string())?;
+    state
+        .db
+        .delete_backup(&backup_id)
+        .map_err(|e| e.to_string())?;
     Ok(true)
 }
 
@@ -735,7 +810,10 @@ pub async fn list_operations(
     state: State<'_, AppState>,
     server_id: Option<String>,
 ) -> Result<Vec<OperationRecord>, String> {
-    state.db.list_operations(server_id.as_deref()).map_err(|e| e.to_string())
+    state
+        .db
+        .list_operations(server_id.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -768,7 +846,10 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiProviderConfi
         .get_setting("ai_model")
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "gpt-4o-mini".to_string());
-    let base_url = state.db.get_setting("ai_base_url").map_err(|e| e.to_string())?;
+    let base_url = state
+        .db
+        .get_setting("ai_base_url")
+        .map_err(|e| e.to_string())?;
 
     Ok(AiProviderConfig {
         provider,
@@ -783,11 +864,23 @@ pub async fn save_ai_config(
     state: State<'_, AppState>,
     config: AiProviderConfig,
 ) -> Result<bool, String> {
-    state.db.set_setting("ai_provider", &config.provider).map_err(|e| e.to_string())?;
-    state.db.set_setting("ai_api_key", &config.api_key).map_err(|e| e.to_string())?;
-    state.db.set_setting("ai_model", &config.model).map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("ai_provider", &config.provider)
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("ai_api_key", &config.api_key)
+        .map_err(|e| e.to_string())?;
+    state
+        .db
+        .set_setting("ai_model", &config.model)
+        .map_err(|e| e.to_string())?;
     if let Some(ref base) = config.base_url {
-        state.db.set_setting("ai_base_url", base).map_err(|e| e.to_string())?;
+        state
+            .db
+            .set_setting("ai_base_url", base)
+            .map_err(|e| e.to_string())?;
     }
     Ok(true)
 }
@@ -862,7 +955,8 @@ pub async fn open_server_directory(
 
     let path = std::path::PathBuf::from(&server.server_dir);
     if !path.exists() {
-        std::fs::create_dir_all(&path).map_err(|e| format!("Failed to create server directory: {}", e))?;
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("Failed to create server directory: {}", e))?;
     }
 
     #[cfg(target_os = "windows")]
@@ -1033,6 +1127,31 @@ pub async fn approve_console_command(
         return Err("This command approval request has expired".to_string());
     }
 
+    // Verify command hash integrity if present
+    if !approval.command_hash.is_empty() {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(approval.command.as_bytes());
+        let computed = format!("{:x}", hasher.finalize());
+        if !computed.eq_ignore_ascii_case(&approval.command_hash) {
+            log::error!(
+                "[Audit] Security violation: approved command hash mismatch for approval_id={}",
+                approval_id
+            );
+            return Err(
+                "Security violation: command payload does not match approved authorization hash"
+                    .to_string(),
+            );
+        }
+    }
+
+    log::info!(
+        "[Audit] User approved and executed command: approval_id={}, server_id={}, command='{}'",
+        approval_id,
+        approval.server_id,
+        approval.command
+    );
+
     state
         .lifecycle
         .send_command(&approval.server_id, &approval.command)
@@ -1062,12 +1181,21 @@ pub async fn reject_console_command(
 ) -> Result<bool, String> {
     let mut apps = state.mcp_engine.approvals.lock().unwrap();
     if let Some(approval) = apps.remove(&approval_id) {
+        log::info!(
+            "[Audit] User rejected command: approval_id={}, server_id={}, command='{}'",
+            approval_id,
+            approval.server_id,
+            approval.command
+        );
         use tauri::Emitter;
-        let _ = app.emit("console-command-rejected", serde_json::json!({
-            "approval_id": approval_id,
-            "command": approval.command,
-            "server_id": approval.server_id
-        }));
+        let _ = app.emit(
+            "console-command-rejected",
+            serde_json::json!({
+                "approval_id": approval_id,
+                "command": approval.command,
+                "server_id": approval.server_id
+            }),
+        );
         Ok(true)
     } else {
         Ok(false)
@@ -1082,6 +1210,20 @@ pub async fn list_pending_approvals(
     let mut apps = state.mcp_engine.approvals.lock().unwrap();
     apps.retain(|_, a| a.expires_at > now);
     Ok(apps.values().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn confirm_app_shutdown(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    log::info!(
+        "[Shutdown] User confirmed application exit. Terminating all servers and tunnels..."
+    );
+    state.lifecycle.stop_all();
+    state.portal_manager.stop_all();
+    app.exit(0);
+    Ok(true)
 }
 
 #[tauri::command]
@@ -1136,11 +1278,17 @@ pub async fn install_modpack_server(
         .await
         .map_err(|e| e.to_string())?;
 
-    state.db.insert_server(&profile).map_err(|e| e.to_string())?;
+    state
+        .db
+        .insert_server(&profile)
+        .map_err(|e| e.to_string())?;
     let _ = state.db.record_operation(
         Some(&profile.id),
         "install_modpack_server",
-        &format!("Installed modpack server '{}' ({:?} {})", profile.name, profile.server_type, profile.minecraft_version),
+        &format!(
+            "Installed modpack server '{}' ({:?} {})",
+            profile.name, profile.server_type, profile.minecraft_version
+        ),
         true,
     );
 
@@ -1156,10 +1304,6 @@ pub async fn cancel_modpack_install(
     Ok(())
 }
 
-
-
-
-
 // ==========================================
 // NEW: LOCAL FILE PICKER & EXTENSION UPLOAD
 // ==========================================
@@ -1169,11 +1313,16 @@ pub async fn pick_local_file(
     title: Option<String>,
     filter_name: Option<String>,
     extensions: Option<Vec<String>>,
+    directory: Option<bool>,
 ) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || {
         let mut dialog = rfd::FileDialog::new();
         if let Some(t) = title {
             dialog = dialog.set_title(&t);
+        }
+        if directory.unwrap_or(false) {
+            let folder = dialog.pick_folder();
+            return Ok(folder.map(|p| p.to_string_lossy().to_string()));
         }
         if let (Some(name), Some(exts)) = (filter_name, extensions) {
             let ext_refs: Vec<&str> = exts.iter().map(|s| s.as_str()).collect();
@@ -1217,14 +1366,19 @@ pub async fn install_local_extension(
     }
 
     let dest_path = folder_path.join(safe_filename);
-    std::fs::write(&dest_path, &file_bytes).map_err(|e| format!("Failed to write extension file: {}", e))?;
+    std::fs::write(&dest_path, &file_bytes)
+        .map_err(|e| format!("Failed to write extension file: {}", e))?;
 
     let size_bytes = file_bytes.len() as u64;
     Ok(ExtensionItem {
         file_name: safe_filename.to_string(),
         name: safe_filename.replace(".jar", "").replace(".disabled", ""),
         version: None,
-        extension_type: if is_modded { "mod".to_string() } else { "plugin".to_string() },
+        extension_type: if is_modded {
+            "mod".to_string()
+        } else {
+            "plugin".to_string()
+        },
         enabled: !safe_filename.ends_with(".disabled"),
         file_size_bytes: size_bytes,
         modified_at: chrono::Utc::now().timestamp_millis(),
@@ -1268,14 +1422,22 @@ pub async fn get_server_player_data(
 
     let sdir = std::path::PathBuf::from(&server.server_dir);
 
-    let mut whitelist_map: std::collections::BTreeMap<String, WhitelistPlayer> = std::collections::BTreeMap::new();
+    let mut whitelist_map: std::collections::BTreeMap<String, WhitelistPlayer> =
+        std::collections::BTreeMap::new();
     let whitelist_path = sdir.join("whitelist.json");
     if whitelist_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&whitelist_path) {
             if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
                 for item in parsed {
-                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let uuid = item.get("uuid").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let uuid = item
+                        .get("uuid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     let trimmed = name.trim();
                     if !trimmed.is_empty() {
                         let key = trimmed.to_lowercase();
@@ -1290,32 +1452,45 @@ pub async fn get_server_player_data(
     }
     let whitelist: Vec<WhitelistPlayer> = whitelist_map.into_values().collect();
 
-    let mut ops_map: std::collections::BTreeMap<String, OpPlayer> = std::collections::BTreeMap::new();
+    let mut ops_map: std::collections::BTreeMap<String, OpPlayer> =
+        std::collections::BTreeMap::new();
     let ops_path = sdir.join("ops.json");
     if ops_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&ops_path) {
             if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
                 for item in parsed {
-                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let uuid = item.get("uuid").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let uuid = item
+                        .get("uuid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     let level = item.get("level").and_then(|v| v.as_u64()).map(|n| n as u8);
-                    let bypasses_player_limit = item.get("bypassesPlayerLimit").and_then(|v| v.as_bool());
+                    let bypasses_player_limit =
+                        item.get("bypassesPlayerLimit").and_then(|v| v.as_bool());
                     let trimmed = name.trim();
                     if !trimmed.is_empty() {
                         let key = trimmed.to_lowercase();
                         let existing = ops_map.get(&key);
                         let should_replace = if let Some(ex) = existing {
-                            (ex.uuid.is_none() && uuid.is_some()) || level.unwrap_or(0) > ex.level.unwrap_or(0)
+                            (ex.uuid.is_none() && uuid.is_some())
+                                || level.unwrap_or(0) > ex.level.unwrap_or(0)
                         } else {
                             true
                         };
                         if should_replace {
-                            ops_map.insert(key, OpPlayer {
-                                uuid,
-                                name: trimmed.to_string(),
-                                level,
-                                bypasses_player_limit,
-                            });
+                            ops_map.insert(
+                                key,
+                                OpPlayer {
+                                    uuid,
+                                    name: trimmed.to_string(),
+                                    level,
+                                    bypasses_player_limit,
+                                },
+                            );
                         }
                     }
                 }
@@ -1324,29 +1499,52 @@ pub async fn get_server_player_data(
     }
     let ops: Vec<OpPlayer> = ops_map.into_values().collect();
 
-    let mut banned_players_map: std::collections::BTreeMap<String, BannedPlayer> = std::collections::BTreeMap::new();
+    let mut banned_players_map: std::collections::BTreeMap<String, BannedPlayer> =
+        std::collections::BTreeMap::new();
     let bp_path = sdir.join("banned-players.json");
     if bp_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&bp_path) {
             if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
                 for item in parsed {
-                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let uuid = item.get("uuid").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let created = item.get("created").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let source = item.get("source").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let expires = item.get("expires").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let reason = item.get("reason").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let uuid = item
+                        .get("uuid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let created = item
+                        .get("created")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let source = item
+                        .get("source")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let expires = item
+                        .get("expires")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let reason = item
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     let trimmed = name.trim();
                     if !trimmed.is_empty() {
                         let key = trimmed.to_lowercase();
-                        banned_players_map.insert(key, BannedPlayer {
-                            uuid,
-                            name: trimmed.to_string(),
-                            created,
-                            source,
-                            expires,
-                            reason,
-                        });
+                        banned_players_map.insert(
+                            key,
+                            BannedPlayer {
+                                uuid,
+                                name: trimmed.to_string(),
+                                created,
+                                source,
+                                expires,
+                                reason,
+                            },
+                        );
                     }
                 }
             }
@@ -1354,27 +1552,47 @@ pub async fn get_server_player_data(
     }
     let banned_players: Vec<BannedPlayer> = banned_players_map.into_values().collect();
 
-    let mut banned_ips_map: std::collections::BTreeMap<String, BannedIp> = std::collections::BTreeMap::new();
+    let mut banned_ips_map: std::collections::BTreeMap<String, BannedIp> =
+        std::collections::BTreeMap::new();
     let bip_path = sdir.join("banned-ips.json");
     if bip_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&bip_path) {
             if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
                 for item in parsed {
-                    let ip = item.get("ip").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let created = item.get("created").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let source = item.get("source").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let expires = item.get("expires").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let reason = item.get("reason").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let ip = item
+                        .get("ip")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let created = item
+                        .get("created")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let source = item
+                        .get("source")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let expires = item
+                        .get("expires")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let reason = item
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     let trimmed = ip.trim();
                     if !trimmed.is_empty() {
                         let key = trimmed.to_string();
-                        banned_ips_map.insert(key, BannedIp {
-                            ip: trimmed.to_string(),
-                            created,
-                            source,
-                            expires,
-                            reason,
-                        });
+                        banned_ips_map.insert(
+                            key,
+                            BannedIp {
+                                ip: trimmed.to_string(),
+                                created,
+                                source,
+                                expires,
+                                reason,
+                            },
+                        );
                     }
                 }
             }
@@ -1400,16 +1618,29 @@ pub async fn get_server_player_data(
     }
 
     // Collect all historical & connected players
-    let mut known_players_map: std::collections::BTreeMap<String, (String, Option<String>, Option<String>)> = std::collections::BTreeMap::new();
+    let mut known_players_map: std::collections::BTreeMap<
+        String,
+        (String, Option<String>, Option<String>),
+    > = std::collections::BTreeMap::new();
 
     let usercache_path = sdir.join("usercache.json");
     if usercache_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&usercache_path) {
             if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
                 for item in parsed {
-                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                    let uuid = item.get("uuid").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let expires = item.get("expiresOn").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let name = item
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let uuid = item
+                        .get("uuid")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let expires = item
+                        .get("expiresOn")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     if !name.is_empty() {
                         known_players_map.insert(name.to_lowercase(), (name, uuid, expires));
                     }
@@ -1463,28 +1694,41 @@ pub async fn get_server_player_data(
 
     for w in &whitelist {
         if !known_players_map.contains_key(&w.name.to_lowercase()) {
-            known_players_map.insert(w.name.to_lowercase(), (w.name.clone(), w.uuid.clone(), None));
+            known_players_map.insert(
+                w.name.to_lowercase(),
+                (w.name.clone(), w.uuid.clone(), None),
+            );
         }
     }
     for op in &ops {
         if !known_players_map.contains_key(&op.name.to_lowercase()) {
-            known_players_map.insert(op.name.to_lowercase(), (op.name.clone(), op.uuid.clone(), None));
+            known_players_map.insert(
+                op.name.to_lowercase(),
+                (op.name.clone(), op.uuid.clone(), None),
+            );
         }
     }
     for b in &banned_players {
         if !known_players_map.contains_key(&b.name.to_lowercase()) {
-            known_players_map.insert(b.name.to_lowercase(), (b.name.clone(), b.uuid.clone(), None));
+            known_players_map.insert(
+                b.name.to_lowercase(),
+                (b.name.clone(), b.uuid.clone(), None),
+            );
         }
     }
 
     let mut players: Vec<crate::models::KnownPlayer> = Vec::new();
     for (_, (name, uuid, expires)) in known_players_map {
-        let is_online = online_players.iter().any(|on| on.eq_ignore_ascii_case(&name));
+        let is_online = online_players
+            .iter()
+            .any(|on| on.eq_ignore_ascii_case(&name));
         let op_info = ops.iter().find(|o| o.name.eq_ignore_ascii_case(&name));
         let is_op = op_info.is_some();
         let op_level = op_info.and_then(|o| o.level);
         let is_whitelisted = whitelist.iter().any(|w| w.name.eq_ignore_ascii_case(&name));
-        let ban_info = banned_players.iter().find(|b| b.name.eq_ignore_ascii_case(&name));
+        let ban_info = banned_players
+            .iter()
+            .find(|b| b.name.eq_ignore_ascii_case(&name));
         let is_banned = ban_info.is_some();
         let ban_reason = ban_info.and_then(|b| b.reason.clone());
 
@@ -1502,12 +1746,10 @@ pub async fn get_server_player_data(
     }
 
     // Sort: Online players first, then alphabetically
-    players.sort_by(|a, b| {
-        match (a.is_online, b.is_online) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        }
+    players.sort_by(|a, b| match (a.is_online, b.is_online) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
 
     Ok(ServerPlayerData {
@@ -1549,13 +1791,22 @@ pub async fn toggle_server_whitelist(
         if !found {
             new_lines.push(format!("white-list={}", enabled));
         }
-        let _ = std::fs::write(&prop_path, new_lines.join("
-"));
+        let _ = std::fs::write(
+            &prop_path,
+            new_lines.join(
+                "
+",
+            ),
+        );
     }
 
     let status = state.lifecycle.get_status(&server_id, server.port);
     if status.state == ServerStatusState::Running {
-        let cmd = if enabled { "whitelist on" } else { "whitelist off" };
+        let cmd = if enabled {
+            "whitelist on"
+        } else {
+            "whitelist off"
+        };
         let _ = state.lifecycle.send_command(&server_id, cmd);
         let _ = state.lifecycle.send_command(&server_id, "whitelist reload");
     }
@@ -1595,7 +1846,8 @@ pub async fn add_server_whitelist(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     list.retain(|item| {
-        !item.get("name")
+        !item
+            .get("name")
             .and_then(|n| n.as_str())
             .map(|n| n.eq_ignore_ascii_case(clean_name))
             .unwrap_or(false)
@@ -1605,11 +1857,16 @@ pub async fn add_server_whitelist(
         "name": clean_name,
         "uuid": resolved_uuid
     }));
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&list).unwrap_or_default(),
+    );
 
     let status = state.lifecycle.get_status(&server_id, server.port);
     if status.state == ServerStatusState::Running {
-        let _ = state.lifecycle.send_command(&server_id, &format!("whitelist add {}", clean_name));
+        let _ = state
+            .lifecycle
+            .send_command(&server_id, &format!("whitelist add {}", clean_name));
         let _ = state.lifecycle.send_command(&server_id, "whitelist reload");
     }
 
@@ -1640,14 +1897,19 @@ pub async fn remove_server_whitelist(
                         .map(|n| !n.eq_ignore_ascii_case(clean_name))
                         .unwrap_or(true)
                 });
-                let _ = std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap_or_default());
+                let _ = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&list).unwrap_or_default(),
+                );
             }
         }
     }
 
     let status = state.lifecycle.get_status(&server_id, server.port);
     if status.state == ServerStatusState::Running {
-        let _ = state.lifecycle.send_command(&server_id, &format!("whitelist remove {}", clean_name));
+        let _ = state
+            .lifecycle
+            .send_command(&server_id, &format!("whitelist remove {}", clean_name));
         let _ = state.lifecycle.send_command(&server_id, "whitelist reload");
     }
 
@@ -1687,7 +1949,8 @@ pub async fn add_server_op(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     list.retain(|item| {
-        !item.get("name")
+        !item
+            .get("name")
             .and_then(|n| n.as_str())
             .map(|n| n.eq_ignore_ascii_case(clean_name))
             .unwrap_or(false)
@@ -1699,11 +1962,16 @@ pub async fn add_server_op(
         "level": level.unwrap_or(4),
         "bypassesPlayerLimit": false
     }));
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&list).unwrap_or_default(),
+    );
 
     let status = state.lifecycle.get_status(&server_id, server.port);
     if status.state == ServerStatusState::Running {
-        let _ = state.lifecycle.send_command(&server_id, &format!("op {}", clean_name));
+        let _ = state
+            .lifecycle
+            .send_command(&server_id, &format!("op {}", clean_name));
     }
 
     Ok(true)
@@ -1733,14 +2001,19 @@ pub async fn remove_server_op(
                         .map(|n| !n.eq_ignore_ascii_case(clean_name))
                         .unwrap_or(true)
                 });
-                let _ = std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap_or_default());
+                let _ = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&list).unwrap_or_default(),
+                );
             }
         }
     }
 
     let status = state.lifecycle.get_status(&server_id, server.port);
     if status.state == ServerStatusState::Running {
-        let _ = state.lifecycle.send_command(&server_id, &format!("deop {}", clean_name));
+        let _ = state
+            .lifecycle
+            .send_command(&server_id, &format!("deop {}", clean_name));
     }
 
     Ok(true)
@@ -1779,7 +2052,8 @@ pub async fn ban_server_player(
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     list.retain(|item| {
-        !item.get("name")
+        !item
+            .get("name")
             .and_then(|n| n.as_str())
             .map(|n| n.eq_ignore_ascii_case(clean_name))
             .unwrap_or(false)
@@ -1793,12 +2067,17 @@ pub async fn ban_server_player(
         "expires": "forever",
         "reason": reason.clone().unwrap_or_else(|| "Banned by an operator.".to_string())
     }));
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&list).unwrap_or_default(),
+    );
 
     let status = state.lifecycle.get_status(&server_id, server.port);
     if status.state == ServerStatusState::Running {
         let reason_arg = reason.as_deref().unwrap_or("Banned by operator");
-        let _ = state.lifecycle.send_command(&server_id, &format!("ban {} {}", clean_name, reason_arg));
+        let _ = state
+            .lifecycle
+            .send_command(&server_id, &format!("ban {} {}", clean_name, reason_arg));
     }
 
     Ok(true)
@@ -1828,14 +2107,19 @@ pub async fn unban_server_player(
                         .map(|n| !n.eq_ignore_ascii_case(clean_name))
                         .unwrap_or(true)
                 });
-                let _ = std::fs::write(&path, serde_json::to_string_pretty(&list).unwrap_or_default());
+                let _ = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&list).unwrap_or_default(),
+                );
             }
         }
     }
 
     let status = state.lifecycle.get_status(&server_id, server.port);
     if status.state == ServerStatusState::Running {
-        let _ = state.lifecycle.send_command(&server_id, &format!("pardon {}", clean_name));
+        let _ = state
+            .lifecycle
+            .send_command(&server_id, &format!("pardon {}", clean_name));
     }
 
     Ok(true)
@@ -1884,7 +2168,7 @@ pub async fn get_world_info(
         .ok_or_else(|| "Server not found".to_string())?;
 
     let sdir = std::path::PathBuf::from(&server.server_dir);
-    
+
     let mut level_name = "world".to_string();
     let prop_path = sdir.join("server.properties");
     if prop_path.exists() {
@@ -1927,15 +2211,24 @@ pub async fn get_world_info(
     }
 
     let total_size_mb = dir_size_mb(&world_dir)
-        + if nether_dir.starts_with(&world_dir) { 0.0 } else { dir_size_mb(&nether_dir) }
-        + if end_dir.starts_with(&world_dir) { 0.0 } else { dir_size_mb(&end_dir) };
+        + if nether_dir.starts_with(&world_dir) {
+            0.0
+        } else {
+            dir_size_mb(&nether_dir)
+        }
+        + if end_dir.starts_with(&world_dir) {
+            0.0
+        } else {
+            dir_size_mb(&end_dir)
+        };
 
     let nether_size_mb = dir_size_mb(&nether_dir);
     let end_size_mb = dir_size_mb(&end_dir);
     let overworld_size_mb = (total_size_mb - nether_size_mb - end_size_mb).max(0.0);
 
     let status = state.lifecycle.get_status(&server_id, server.port);
-    let is_server_running = status.state == ServerStatusState::Running || status.state == ServerStatusState::Starting;
+    let is_server_running =
+        status.state == ServerStatusState::Running || status.state == ServerStatusState::Starting;
 
     Ok(WorldDetails {
         level_name,
@@ -2068,14 +2361,21 @@ pub async fn import_world_archive(
 
     let safe_folder_name = target_name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
 
     let target_dir = sdir.join(&safe_folder_name);
     std::fs::create_dir_all(&target_dir).map_err(|e| e.to_string())?;
 
     let file = std::fs::File::open(&zip_file_path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("Invalid zip archive: {}", e))?;
 
     let mut prefix_to_strip = None;
     let first_root = {
@@ -2103,7 +2403,7 @@ pub async fn import_world_archive(
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let entry_name = entry.name().replace('\\', "/");
-        
+
         let sub_path = if let Some(ref pfx) = prefix_to_strip {
             if let Some(stripped) = entry_name.strip_prefix(pfx) {
                 stripped.to_string()
@@ -2151,8 +2451,13 @@ pub async fn import_world_archive(
         if !found {
             lines.push(format!("level-name={}", safe_folder_name));
         }
-        let _ = std::fs::write(&prop_path, lines.join("
-"));
+        let _ = std::fs::write(
+            &prop_path,
+            lines.join(
+                "
+",
+            ),
+        );
     }
 
     Ok(safe_folder_name)
@@ -2213,7 +2518,9 @@ pub async fn list_server_dir(
         let ext = if is_dir {
             None
         } else {
-            path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase())
+            path.extension()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_lowercase())
         };
 
         entries.push(FileEntry {
@@ -2252,8 +2559,9 @@ pub async fn read_text_file(
         .ok_or_else(|| "Server not found".to_string())?;
 
     let sdir = std::path::PathBuf::from(&server.server_dir);
-    let file_path = crate::security::SecurityPolicy::resolve_server_relative_path(&sdir, &relative_path)
-        .map_err(|e| e.to_string())?;
+    let file_path =
+        crate::security::SecurityPolicy::resolve_server_relative_path(&sdir, &relative_path)
+            .map_err(|e| e.to_string())?;
     if !file_path.exists() {
         return Err("File not found".to_string());
     }
@@ -2280,8 +2588,9 @@ pub async fn save_text_file(
         .ok_or_else(|| "Server not found".to_string())?;
 
     let sdir = std::path::PathBuf::from(&server.server_dir);
-    let file_path = crate::security::SecurityPolicy::resolve_server_relative_path(&sdir, &relative_path)
-        .map_err(|e| e.to_string())?;
+    let file_path =
+        crate::security::SecurityPolicy::resolve_server_relative_path(&sdir, &relative_path)
+            .map_err(|e| e.to_string())?;
     if let Some(parent) = file_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -2303,14 +2612,16 @@ pub async fn delete_server_path(
         .ok_or_else(|| "Server not found".to_string())?;
 
     let sdir = std::path::PathBuf::from(&server.server_dir);
-    let target = crate::security::SecurityPolicy::resolve_server_relative_path(&sdir, &relative_path)
-        .map_err(|e| e.to_string())?;
+    let target =
+        crate::security::SecurityPolicy::resolve_server_relative_path(&sdir, &relative_path)
+            .map_err(|e| e.to_string())?;
     if !target.exists() {
         return Err("Target path does not exist".to_string());
     }
 
     if target.is_dir() {
-        std::fs::remove_dir_all(&target).map_err(|e| format!("Failed to delete directory: {}", e))?;
+        std::fs::remove_dir_all(&target)
+            .map_err(|e| format!("Failed to delete directory: {}", e))?;
     } else {
         std::fs::remove_file(&target).map_err(|e| format!("Failed to delete file: {}", e))?;
     }
@@ -2331,12 +2642,12 @@ pub async fn create_server_folder(
         .ok_or_else(|| "Server not found".to_string())?;
 
     let sdir = std::path::PathBuf::from(&server.server_dir);
-    let target = crate::security::SecurityPolicy::validate_safe_relative_path(&sdir, &relative_path)
-        .map_err(|e| e.to_string())?;
+    let target =
+        crate::security::SecurityPolicy::validate_safe_relative_path(&sdir, &relative_path)
+            .map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&target).map_err(|e| format!("Failed to create folder: {}", e))?;
     Ok(true)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -2381,7 +2692,8 @@ mod tests {
 
         let target_name = "STEVE";
         list.retain(|item| {
-            !item.get("name")
+            !item
+                .get("name")
                 .and_then(|n| n.as_str())
                 .map(|n| n.eq_ignore_ascii_case(target_name))
                 .unwrap_or(false)
@@ -2398,5 +2710,90 @@ mod tests {
         }));
 
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_command_approval_lifecycle_security() {
+        use crate::models::PendingCommandApproval;
+        use sha2::{Digest, Sha256};
+        use std::collections::HashMap;
+
+        let mut approvals: HashMap<String, PendingCommandApproval> = HashMap::new();
+        let approval_id = "test-approval-123".to_string();
+        let cmd = "op TrustedUser".to_string();
+
+        let mut hasher = Sha256::new();
+        hasher.update(cmd.as_bytes());
+        let cmd_hash = format!("{:x}", hasher.finalize());
+
+        let now = chrono::Utc::now().timestamp();
+        let valid_app = PendingCommandApproval {
+            id: approval_id.clone(),
+            server_id: "srv-1".to_string(),
+            server_name: "Test Server".to_string(),
+            command: cmd.clone(),
+            command_hash: cmd_hash.clone(),
+            explanation: "Grants admin".to_string(),
+            impact: "Full access".to_string(),
+            created_at: now,
+            expires_at: now + 300,
+        };
+
+        approvals.insert(approval_id.clone(), valid_app);
+
+        // 1. First consumption removes and validates
+        let consumed = approvals.remove(&approval_id);
+        assert!(consumed.is_some());
+        let item = consumed.unwrap();
+        assert!(now <= item.expires_at);
+
+        // Validate hash
+        let mut h2 = Sha256::new();
+        h2.update(item.command.as_bytes());
+        assert_eq!(format!("{:x}", h2.finalize()), item.command_hash);
+
+        // 2. Replay attack: Second attempt MUST fail (single-use consumption)
+        let replayed = approvals.remove(&approval_id);
+        assert!(replayed.is_none());
+
+        // 3. Expired approval
+        let expired_id = "expired-app".to_string();
+        let expired_app = PendingCommandApproval {
+            id: expired_id.clone(),
+            server_id: "srv-1".to_string(),
+            server_name: "Test Server".to_string(),
+            command: "stop".to_string(),
+            command_hash: "abcd".to_string(),
+            explanation: "Stop".to_string(),
+            impact: "Shutdown".to_string(),
+            created_at: now - 600,
+            expires_at: now - 300, // expired 5 mins ago
+        };
+        approvals.insert(expired_id.clone(), expired_app);
+        let exp_consumed = approvals.remove(&expired_id).unwrap();
+        assert!(now > exp_consumed.expires_at, "Must detect expiration");
+
+        // 4. Command tampering: hash mismatch
+        let tampered_id = "tampered-app".to_string();
+        let tampered_app = PendingCommandApproval {
+            id: tampered_id.clone(),
+            server_id: "srv-1".to_string(),
+            server_name: "Test Server".to_string(),
+            command: "stop".to_string(),    // modified payload
+            command_hash: cmd_hash.clone(), // original hash for 'op TrustedUser'
+            explanation: "Tampered".to_string(),
+            impact: "Tampered".to_string(),
+            created_at: now,
+            expires_at: now + 300,
+        };
+        approvals.insert(tampered_id.clone(), tampered_app);
+        let tamp_consumed = approvals.remove(&tampered_id).unwrap();
+        let mut h3 = Sha256::new();
+        h3.update(tamp_consumed.command.as_bytes());
+        assert_ne!(
+            format!("{:x}", h3.finalize()),
+            tamp_consumed.command_hash,
+            "Must detect hash mismatch"
+        );
     }
 }

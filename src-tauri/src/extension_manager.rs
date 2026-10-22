@@ -1,12 +1,12 @@
-use std::fs::File;
-use std::io::Write;
-use std::path::Path;
-use anyhow::{anyhow, Result};
+use crate::models::{ExtensionItem, ServerType};
+use crate::security::SecurityPolicy;
+use anyhow::{Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
-use crate::models::{ExtensionItem, ServerType};
-use crate::security::SecurityPolicy;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
 
 pub struct ExtensionManager;
 
@@ -64,7 +64,9 @@ impl ExtensionManager {
     /// Returns the target subfolder ("plugins" or "mods") for the given server type
     pub fn get_extension_folder_name(server_type: &ServerType) -> &'static str {
         match server_type {
-            ServerType::Fabric | ServerType::Forge | ServerType::NeoForge | ServerType::Quilt => "mods",
+            ServerType::Fabric | ServerType::Forge | ServerType::NeoForge | ServerType::Quilt => {
+                "mods"
+            }
             ServerType::Paper | ServerType::Purpur | ServerType::Spigot => "plugins",
             ServerType::Arclight => "plugins", // Hybrid can support both, default to plugins
             ServerType::Vanilla => "plugins",
@@ -72,7 +74,10 @@ impl ExtensionManager {
     }
 
     /// Lists installed extensions in the server's extension directory
-    pub fn list_installed(server_dir: &Path, server_type: &ServerType) -> Result<Vec<ExtensionItem>> {
+    pub fn list_installed(
+        server_dir: &Path,
+        server_type: &ServerType,
+    ) -> Result<Vec<ExtensionItem>> {
         let folder_name = Self::get_extension_folder_name(server_type);
         let ext_dir = server_dir.join(folder_name);
 
@@ -90,7 +95,11 @@ impl ExtensionManager {
                 continue;
             }
 
-            let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let file_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let is_jar = file_name.ends_with(".jar");
             let is_disabled = file_name.ends_with(".jar.disabled");
 
@@ -300,7 +309,10 @@ impl ExtensionManager {
         let res = client.get(&url).send().await?;
         if !res.status().is_success() {
             // Try fetching all versions for project
-            let fallback_url = format!("https://api.modrinth.com/v2/project/{}/version", project_id_or_slug);
+            let fallback_url = format!(
+                "https://api.modrinth.com/v2/project/{}/version",
+                project_id_or_slug
+            );
             let res2 = client.get(&fallback_url).send().await?;
             if !res2.status().is_success() {
                 return Err(anyhow!("Failed to fetch project versions from Modrinth"));

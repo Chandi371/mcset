@@ -1,12 +1,12 @@
+use crate::models::BackupRecord;
+use crate::security::SecurityPolicy;
+use anyhow::{Result, anyhow};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use anyhow::{anyhow, Result};
 use walkdir::WalkDir;
 use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, ZipWriter};
-use crate::models::BackupRecord;
-use crate::security::SecurityPolicy;
 
 pub struct BackupManager;
 
@@ -47,7 +47,10 @@ impl BackupManager {
 
             // Skip temporary files and large cache directories
             let file_name_str = path.file_name().unwrap_or_default().to_string_lossy();
-            if file_name_str.starts_with('.') || file_name_str == "cache" || file_name_str.ends_with(".tmp") {
+            if file_name_str.starts_with('.')
+                || file_name_str == "cache"
+                || file_name_str.ends_with(".tmp")
+            {
                 continue;
             }
 

@@ -1,21 +1,36 @@
+use anyhow::{Result, anyhow};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use anyhow::{anyhow, Result};
-use serde_json::json;
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
 use crate::backup_manager::BackupManager;
 use crate::config_manager::ConfigManager;
 use crate::database::Database;
 use crate::extension_manager::ExtensionManager;
-use crate::models::{McpToolCall, McpToolResult, PendingCommandApproval, ServerProfile, ServerType, ServerStatusState};
-use crate::security::SecurityPolicy;
+use crate::models::{
+    McpToolCall, McpToolResult, PendingCommandApproval, ServerProfile, ServerStatusState,
+    ServerType,
+};
+use crate::modpack_manager::ModpackManager;
 use crate::portal_manager::PortalManager;
+use crate::security::SecurityPolicy;
 use crate::server_lifecycle::ServerLifecycleManager;
 use crate::software_manager::SoftwareProviderManager;
-use crate::modpack_manager::ModpackManager;
+
+/// Detailed classification and security normalization of a console command
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandClassification {
+    pub requires_approval: bool,
+    pub is_rejected: bool,
+    pub normalized_command: String,
+    pub command_hash: String,
+    pub explanation: &'static str,
+    pub impact: &'static str,
+    pub rejection_reason: Option<String>,
+}
 
 pub struct McpToolEngine {
     pub db: Database,
@@ -60,95 +75,308 @@ impl McpToolEngine {
         (desired_port, false)
     }
 
-    /// Classifies a Minecraft console command to determine if it requires explicit user approval
-    pub fn classify_command(command: &str) -> (bool, &'static str, &'static str) {
-        let trimmed = command.trim().trim_start_matches('/');
-        let first_word = trimmed.split_whitespace().next().unwrap_or("").to_lowercase();
+    /// Detailed classification and security normalization of a console command
+    pub fn normalize_and_classify_command(command: &str) -> CommandClassification {
+        // 1. Strictly reject null bytes
+        if command.contains('\0') {
+            return CommandClassification {
+                requires_approval: true,
+                is_rejected: true,
+                normalized_command: String::new(),
+                command_hash: String::new(),
+                explanation: "Command rejected",
+                impact: "Null byte injection detected",
+                rejection_reason: Some("Forbidden null byte '\\0' detected in command".to_string()),
+            };
+        }
 
-        match first_word.as_str() {
-            "list" | "help" | "tps" | "version" | "seed" | "plugins" | "pl" => {
-                (false, "Informational query", "Read-only operation with no server side-effects")
-            }
+        // 2. Strictly reject multi-line injection attacks
+        if command.contains('\n') || command.contains('\r') {
+            return CommandClassification {
+                requires_approval: true,
+                is_rejected: true,
+                normalized_command: String::new(),
+                command_hash: String::new(),
+                explanation: "Multi-line command rejected",
+                impact: "Multi-line command execution attempts are forbidden to prevent injection",
+                rejection_reason: Some("Multi-line commands containing newline or carriage return characters are strictly rejected".to_string()),
+            };
+        }
+
+        // 3. Strictly reject command chaining and pipeline operators
+        if command.contains(';')
+            || command.contains("&&")
+            || command.contains("||")
+            || command.contains('|')
+        {
+            return CommandClassification {
+                requires_approval: true,
+                is_rejected: true,
+                normalized_command: String::new(),
+                command_hash: String::new(),
+                explanation: "Command chaining rejected",
+                impact: "Command chaining and pipeline operators are forbidden",
+                rejection_reason: Some("Chained commands or separator tokens (';', '&&', '||', '|') are strictly forbidden".to_string()),
+            };
+        }
+
+        // 4. Normalize whitespace: trim leading '/', collapse multiple spaces and tabs
+        let trimmed = command.trim().trim_start_matches('/').trim();
+        if trimmed.is_empty() {
+            return CommandClassification {
+                requires_approval: true,
+                is_rejected: true,
+                normalized_command: String::new(),
+                command_hash: String::new(),
+                explanation: "Empty command",
+                impact: "No command provided",
+                rejection_reason: Some("Command is empty".to_string()),
+            };
+        }
+
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        let normalized = tokens.join(" ");
+
+        // Compute SHA-256 hash of the normalized command
+        let mut hasher = Sha256::new();
+        hasher.update(normalized.as_bytes());
+        let command_hash = format!("{:x}", hasher.finalize());
+
+        // 5. Extract and normalize the root command token
+        let raw_root = tokens[0].to_lowercase();
+        // Strip namespace prefix if present (e.g. "minecraft:list" -> "list", "bukkit:reload" -> "reload")
+        let root = if let Some((_namespace, cmd)) = raw_root.split_once(':') {
+            cmd
+        } else {
+            &raw_root
+        };
+
+        // 6. Conservative allowlist for genuinely read-only operations
+        match root {
+            "list" => CommandClassification {
+                requires_approval: false,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Online player list query",
+                impact: "Read-only inspection of online players with no side-effects",
+                rejection_reason: None,
+            },
+            "tps" => CommandClassification {
+                requires_approval: false,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Tick performance query",
+                impact: "Read-only server performance inspection",
+                rejection_reason: None,
+            },
+            "version" => CommandClassification {
+                requires_approval: false,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Server software version query",
+                impact: "Read-only version inspection",
+                rejection_reason: None,
+            },
+            "seed" => CommandClassification {
+                requires_approval: false,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "World seed query",
+                impact: "Read-only inspection of active world seed",
+                rejection_reason: None,
+            },
+            "plugins" | "pl" => CommandClassification {
+                requires_approval: false,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Plugin inventory query",
+                impact: "Read-only plugin list inspection",
+                rejection_reason: None,
+            },
             "time" => {
-                if trimmed.to_lowercase().starts_with("time query") {
-                    (false, "Time query", "Read-only game time inspection")
+                if tokens.len() >= 2 && tokens[1].eq_ignore_ascii_case("query") {
+                    CommandClassification {
+                        requires_approval: false,
+                        is_rejected: false,
+                        normalized_command: normalized,
+                        command_hash,
+                        explanation: "Time query",
+                        impact: "Read-only game time inspection",
+                        rejection_reason: None,
+                    }
                 } else {
-                    (true, "Changes game time", "Modifies the current world time for all connected players")
+                    CommandClassification {
+                        requires_approval: true,
+                        is_rejected: false,
+                        normalized_command: normalized,
+                        command_hash,
+                        explanation: "Modifies world time",
+                        impact: "Alters active world time for all connected players",
+                        rejection_reason: None,
+                    }
                 }
             }
             "weather" => {
-                if trimmed.to_lowercase().starts_with("weather query") {
-                    (false, "Weather query", "Read-only weather inspection")
+                if tokens.len() >= 2 && tokens[1].eq_ignore_ascii_case("query") {
+                    CommandClassification {
+                        requires_approval: false,
+                        is_rejected: false,
+                        normalized_command: normalized,
+                        command_hash,
+                        explanation: "Weather query",
+                        impact: "Read-only weather inspection",
+                        rejection_reason: None,
+                    }
                 } else {
-                    (true, "Changes weather", "Alters active world weather conditions")
+                    CommandClassification {
+                        requires_approval: true,
+                        is_rejected: false,
+                        normalized_command: normalized,
+                        command_hash,
+                        explanation: "Modifies weather",
+                        impact: "Alters active world weather conditions",
+                        rejection_reason: None,
+                    }
                 }
             }
-            "op" => (
-                true,
-                "Grants administrator (operator) privileges",
-                "Grants unrestricted command and configuration access to the designated player",
-            ),
-            "deop" => (
-                true,
-                "Revokes administrator privileges",
-                "Demotes an administrator back to standard player status",
-            ),
-            "ban" | "ban-ip" => (
-                true,
-                "Bans a player or IP address",
-                "Permanently blocks the player or IP address from joining the server",
-            ),
-            "pardon" | "pardon-ip" => (
-                true,
-                "Unbans a player or IP address",
-                "Restores server access for a previously banned player",
-            ),
-            "kick" => (
-                true,
-                "Kicks a player from the server",
-                "Forcefully disconnects the designated player from the active game session",
-            ),
-            "whitelist" => (
-                true,
-                "Modifies server whitelist",
-                "Changes who is permitted to join the server",
-            ),
-            "gamerule" => (
-                true,
-                "Modifies global game rule",
-                "Alters core gameplay rules and mechanics (e.g. keepInventory, mobGriefing)",
-            ),
-            "stop" => (
-                true,
-                "Shuts down the Minecraft server",
-                "Disconnects all active players and stops the server process",
-            ),
-            "restart" => (
-                true,
-                "Restarts the Minecraft server",
-                "Reboots the server process",
-            ),
-            "fill" | "setblock" | "clone" => (
-                true,
-                "Modifies world blocks in bulk",
-                "Permanently alters terrain blocks in the active world",
-            ),
-            "kill" => (
-                true,
-                "Kills players or entities",
-                "Causes player death or entity removal in the world",
-            ),
-            "reload" => (
-                true,
-                "Reloads server plugins and configurations",
-                "May cause performance hitches, memory leaks, or plugin desynchronization",
-            ),
-            _ => (
-                true,
-                "Custom console command",
-                "May alter game state, permissions, or server data",
-            ),
+            "help" => CommandClassification {
+                requires_approval: false,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Help and syntax query",
+                impact: "Read-only documentation inspection",
+                rejection_reason: None,
+            },
+            "op" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Grants administrator (operator) privileges",
+                impact: "Grants unrestricted command and configuration access to the designated player",
+                rejection_reason: None,
+            },
+            "deop" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Revokes administrator privileges",
+                impact: "Demotes an administrator back to standard player status",
+                rejection_reason: None,
+            },
+            "ban" | "ban-ip" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Bans a player or IP address",
+                impact: "Permanently blocks the player or IP address from joining the server",
+                rejection_reason: None,
+            },
+            "pardon" | "pardon-ip" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Unbans a player or IP address",
+                impact: "Restores server access for a previously banned player",
+                rejection_reason: None,
+            },
+            "kick" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Kicks a player from the server",
+                impact: "Forcefully disconnects the designated player from the active game session",
+                rejection_reason: None,
+            },
+            "whitelist" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Modifies server whitelist",
+                impact: "Changes who is permitted to join the server",
+                rejection_reason: None,
+            },
+            "gamerule" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Modifies global game rule",
+                impact: "Alters core gameplay mechanics (e.g. keepInventory, mobGriefing)",
+                rejection_reason: None,
+            },
+            "stop" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Shuts down the Minecraft server",
+                impact: "Disconnects all active players and stops the server process",
+                rejection_reason: None,
+            },
+            "restart" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Restarts the Minecraft server",
+                impact: "Reboots the server process",
+                rejection_reason: None,
+            },
+            "fill" | "setblock" | "clone" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Modifies world blocks in bulk",
+                impact: "Permanently alters terrain blocks in the active world",
+                rejection_reason: None,
+            },
+            "kill" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Kills players or entities",
+                impact: "Causes player death or entity removal in the world",
+                rejection_reason: None,
+            },
+            "reload" => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Reloads server plugins and configurations",
+                impact: "May cause performance hitches, memory leaks, or plugin desynchronization",
+                rejection_reason: None,
+            },
+            _ => CommandClassification {
+                requires_approval: true,
+                is_rejected: false,
+                normalized_command: normalized,
+                command_hash,
+                explanation: "Custom console command",
+                impact: "May alter game state, permissions, or server data",
+                rejection_reason: None,
+            },
         }
+    }
+
+    /// Classifies a Minecraft console command (preserves backward compatibility)
+    pub fn classify_command(command: &str) -> (bool, &'static str, &'static str) {
+        let res = Self::normalize_and_classify_command(command);
+        (res.requires_approval, res.explanation, res.impact)
     }
 
     /// Returns JSON tool definitions for LLMs
@@ -807,7 +1035,9 @@ impl McpToolEngine {
             "install_modpack_server" => self.tool_install_modpack_server(args).await,
             "download_java_runtime" => self.tool_download_java_runtime(args).await,
             "auto_fix_server_java" => self.tool_auto_fix_server_java(args).await,
-            "diagnose_server_performance" | "get_server_performance" => self.tool_diagnose_server_performance(args).await,
+            "diagnose_server_performance" | "get_server_performance" => {
+                self.tool_diagnose_server_performance(args).await
+            }
             other => Err(anyhow!("Unknown tool: {}", other)),
         };
 
@@ -911,11 +1141,23 @@ impl McpToolEngine {
             .get("relative_path")
             .and_then(|v| v.as_str())
             .unwrap_or("server.properties");
-        let start_line = args.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let end_line = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let tail_lines = args.get("tail_lines").and_then(|v| v.as_u64()).map(|n| n as usize);
+        let start_line = args
+            .get("start_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let end_line = args
+            .get("end_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let tail_lines = args
+            .get("tail_lines")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
         let section = args.get("section").and_then(|v| v.as_str());
-        let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("auto");
+        let format = args
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("auto");
 
         let server = self
             .db
@@ -925,7 +1167,10 @@ impl McpToolEngine {
         let validated = SecurityPolicy::resolve_server_relative_path(&server_dir, relative_path)?;
 
         if !validated.exists() {
-            return Err(anyhow!("Configuration file does not exist: {}", relative_path));
+            return Err(anyhow!(
+                "Configuration file does not exist: {}",
+                relative_path
+            ));
         }
 
         let full_content = std::fs::read_to_string(&validated)?;
@@ -936,25 +1181,30 @@ impl McpToolEngine {
         let lines: Vec<&str> = full_content.lines().collect();
         let total_lines = lines.len();
 
-        let (selected_lines, range_start, range_end) = if let (Some(s), Some(e)) = (start_line, end_line) {
-            let s_idx = s.saturating_sub(1).min(total_lines);
-            let e_idx = e.min(total_lines).max(s_idx);
-            (lines[s_idx..e_idx].join("\n"), s_idx + 1, e_idx)
-        } else if let Some(tail) = tail_lines {
-            let t = tail.clamp(1, 500);
-            let s_idx = total_lines.saturating_sub(t);
-            (lines[s_idx..].join("\n"), s_idx + 1, total_lines)
-        } else if let Some(sec) = section {
-            let matching: Vec<&str> = lines
-                .iter()
-                .filter(|l| l.to_lowercase().contains(&sec.to_lowercase()))
-                .copied()
-                .collect();
-            (matching.join("\n"), 1, matching.len())
-        } else {
-            let capped = if total_lines > 1500 { &lines[..1500] } else { &lines[..] };
-            (capped.join("\n"), 1, capped.len())
-        };
+        let (selected_lines, range_start, range_end) =
+            if let (Some(s), Some(e)) = (start_line, end_line) {
+                let s_idx = s.saturating_sub(1).min(total_lines);
+                let e_idx = e.min(total_lines).max(s_idx);
+                (lines[s_idx..e_idx].join("\n"), s_idx + 1, e_idx)
+            } else if let Some(tail) = tail_lines {
+                let t = tail.clamp(1, 500);
+                let s_idx = total_lines.saturating_sub(t);
+                (lines[s_idx..].join("\n"), s_idx + 1, total_lines)
+            } else if let Some(sec) = section {
+                let matching: Vec<&str> = lines
+                    .iter()
+                    .filter(|l| l.to_lowercase().contains(&sec.to_lowercase()))
+                    .copied()
+                    .collect();
+                (matching.join("\n"), 1, matching.len())
+            } else {
+                let capped = if total_lines > 1500 {
+                    &lines[..1500]
+                } else {
+                    &lines[..]
+                };
+                (capped.join("\n"), 1, capped.len())
+            };
 
         Ok(json!({
             "relative_path": relative_path,
@@ -975,15 +1225,24 @@ impl McpToolEngine {
             .and_then(|v| v.as_str())
             .unwrap_or("ALL")
             .to_uppercase();
-        let only_errors = args.get("only_errors").and_then(|v| v.as_bool()).unwrap_or(false);
+        let only_errors = args
+            .get("only_errors")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let tail_lines = args
             .get("tail_lines")
             .and_then(|v| v.as_u64())
             .or_else(|| args.get("limit").and_then(|v| v.as_u64()))
             .unwrap_or(50)
             .clamp(1, 500) as usize;
-        let start_line = args.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let end_line = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
+        let start_line = args
+            .get("start_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let end_line = args
+            .get("end_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
         let search_pattern = args.get("search_pattern").and_then(|v| v.as_str());
 
         // Get logs from in-memory ringbuffer or fallback to disk logs/latest.log
@@ -992,7 +1251,9 @@ impl McpToolEngine {
             if !mem_logs.is_empty() {
                 mem_logs
             } else if let Ok(Some(server)) = self.db.get_server(server_id) {
-                let log_file = PathBuf::from(&server.server_dir).join("logs").join("latest.log");
+                let log_file = PathBuf::from(&server.server_dir)
+                    .join("logs")
+                    .join("latest.log");
                 if log_file.exists() {
                     if let Ok(file) = std::fs::File::open(&log_file) {
                         use std::io::{BufRead, BufReader};
@@ -1015,7 +1276,8 @@ impl McpToolEngine {
 
         for line in raw_logs {
             let lower = line.to_lowercase();
-            let is_err = lower.contains("error") || lower.contains("fatal") || lower.contains("exception");
+            let is_err =
+                lower.contains("error") || lower.contains("fatal") || lower.contains("exception");
             let is_stack = line.trim_start().starts_with("at ") || line.contains("Caused by:");
 
             if is_err {
@@ -1027,8 +1289,19 @@ impl McpToolEngine {
             let matches_level = match level.as_str() {
                 "ERROR" => is_err || (inside_exception && is_stack),
                 "WARN" => is_err || lower.contains("warn") || (inside_exception && is_stack),
-                "INFO" => is_err || lower.contains("info") || lower.contains("warn") || (inside_exception && is_stack),
-                _ => if only_errors { is_err || (inside_exception && is_stack) } else { true },
+                "INFO" => {
+                    is_err
+                        || lower.contains("info")
+                        || lower.contains("warn")
+                        || (inside_exception && is_stack)
+                }
+                _ => {
+                    if only_errors {
+                        is_err || (inside_exception && is_stack)
+                    } else {
+                        true
+                    }
+                }
             };
 
             let matches_search = match search_pattern {
@@ -1054,7 +1327,10 @@ impl McpToolEngine {
                     repeat_count += 1;
                     continue;
                 } else if repeat_count > 0 {
-                    deduped.push(format!("    ... (previous message repeated {} times) ...", repeat_count));
+                    deduped.push(format!(
+                        "    ... (previous message repeated {} times) ...",
+                        repeat_count
+                    ));
                     repeat_count = 0;
                 }
             }
@@ -1062,21 +1338,25 @@ impl McpToolEngine {
             deduped.push(line);
         }
         if repeat_count > 0 {
-            deduped.push(format!("    ... (previous message repeated {} times) ...", repeat_count));
+            deduped.push(format!(
+                "    ... (previous message repeated {} times) ...",
+                repeat_count
+            ));
         }
 
-        let (selected_lines, range_start, range_end, truncated) = if let (Some(s), Some(e)) = (start_line, end_line) {
-            let s_idx = s.saturating_sub(1).min(deduped.len());
-            let e_idx = e.min(deduped.len()).max(s_idx);
-            let slice = deduped[s_idx..e_idx].to_vec();
-            (slice, s_idx + 1, e_idx, s_idx > 0 || e_idx < deduped.len())
-        } else if deduped.len() > tail_lines {
-            let s_idx = deduped.len() - tail_lines;
-            (deduped[s_idx..].to_vec(), s_idx + 1, deduped.len(), true)
-        } else {
-            let len = deduped.len();
-            (deduped, 1, len, false)
-        };
+        let (selected_lines, range_start, range_end, truncated) =
+            if let (Some(s), Some(e)) = (start_line, end_line) {
+                let s_idx = s.saturating_sub(1).min(deduped.len());
+                let e_idx = e.min(deduped.len()).max(s_idx);
+                let slice = deduped[s_idx..e_idx].to_vec();
+                (slice, s_idx + 1, e_idx, s_idx > 0 || e_idx < deduped.len())
+            } else if deduped.len() > tail_lines {
+                let s_idx = deduped.len() - tail_lines;
+                (deduped[s_idx..].to_vec(), s_idx + 1, deduped.len(), true)
+            } else {
+                let len = deduped.len();
+                (deduped, 1, len, false)
+            };
 
         Ok(json!({
             "lines": selected_lines,
@@ -1179,7 +1459,10 @@ impl McpToolEngine {
         Ok(json!({ "backup": backup, "success": true }))
     }
 
-    async fn tool_propose_config_change(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_propose_config_change(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
@@ -1208,7 +1491,10 @@ impl McpToolEngine {
         Ok(json!({ "diffs": diffs, "count": diffs.len() }))
     }
 
-    async fn tool_apply_config_change(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_apply_config_change(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
@@ -1247,9 +1533,15 @@ impl McpToolEngine {
         let search_pattern = args["search_pattern"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'search_pattern'"))?;
-        let case_sensitive = args.get("case_sensitive").and_then(|v| v.as_bool()).unwrap_or(false);
+        let case_sensitive = args
+            .get("case_sensitive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-        let server = self.db.get_server(server_id)?.ok_or_else(|| anyhow!("Server not found"))?;
+        let server = self
+            .db
+            .get_server(server_id)?
+            .ok_or_else(|| anyhow!("Server not found"))?;
         let server_dir = PathBuf::from(&server.server_dir);
         let validated = SecurityPolicy::resolve_server_relative_path(&server_dir, relative_path)?;
 
@@ -1300,12 +1592,24 @@ impl McpToolEngine {
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'relative_path'"))?;
         let find_text = args.get("find_text").and_then(|v| v.as_str());
-        let replace_text = args.get("replace_text").and_then(|v| v.as_str()).unwrap_or("");
-        let start_line = args.get("start_line").and_then(|v| v.as_u64()).map(|n| n as usize);
-        let end_line = args.get("end_line").and_then(|v| v.as_u64()).map(|n| n as usize);
+        let replace_text = args
+            .get("replace_text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let start_line = args
+            .get("start_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let end_line = args
+            .get("end_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
         let expected_hash = args.get("expected_hash").and_then(|v| v.as_str());
 
-        let server = self.db.get_server(server_id)?.ok_or_else(|| anyhow!("Server not found"))?;
+        let server = self
+            .db
+            .get_server(server_id)?
+            .ok_or_else(|| anyhow!("Server not found"))?;
         let server_dir = PathBuf::from(&server.server_dir);
         let validated = SecurityPolicy::resolve_server_relative_path(&server_dir, relative_path)?;
 
@@ -1323,7 +1627,8 @@ impl McpToolEngine {
             if !current_hash.eq_ignore_ascii_case(expected) {
                 return Err(anyhow!(
                     "Concurrency conflict: The file has been modified since it was read. Expected hash {}, got {}.",
-                    expected, current_hash
+                    expected,
+                    current_hash
                 ));
             }
         }
@@ -1338,7 +1643,10 @@ impl McpToolEngine {
 
         let new_content = if let Some(find) = find_text {
             if !current_content.contains(find) {
-                return Err(anyhow!("Target 'find_text' was not found in {:?}", relative_path));
+                return Err(anyhow!(
+                    "Target 'find_text' was not found in {:?}",
+                    relative_path
+                ));
             }
             current_content.replacen(find, replace_text, 1)
         } else if let (Some(s), Some(e)) = (start_line, end_line) {
@@ -1354,7 +1662,9 @@ impl McpToolEngine {
             out.extend_from_slice(&lines[e_idx..]);
             out.join("\n")
         } else {
-            return Err(anyhow!("patch_file requires either 'find_text' or 'start_line'/'end_line'"));
+            return Err(anyhow!(
+                "patch_file requires either 'find_text' or 'start_line'/'end_line'"
+            ));
         };
 
         // Atomic write
@@ -1374,7 +1684,10 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_set_server_property(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_set_server_property(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
@@ -1385,7 +1698,10 @@ impl McpToolEngine {
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'value'"))?;
 
-        let server = self.db.get_server(server_id)?.ok_or_else(|| anyhow!("Server not found"))?;
+        let server = self
+            .db
+            .get_server(server_id)?
+            .ok_or_else(|| anyhow!("Server not found"))?;
         let server_dir = PathBuf::from(&server.server_dir);
 
         let mut updates = BTreeMap::new();
@@ -1409,32 +1725,46 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_send_console_command(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_send_console_command(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let command = args["command"]
+        let raw_command = args["command"]
             .as_str()
-            .ok_or_else(|| anyhow!("Missing 'command'"))?
-            .trim();
+            .ok_or_else(|| anyhow!("Missing 'command'"))?;
 
-        if command.is_empty() {
-            return Err(anyhow!("Command cannot be empty"));
+        let classification = Self::normalize_and_classify_command(raw_command);
+        if classification.is_rejected {
+            let reason = classification
+                .rejection_reason
+                .unwrap_or_else(|| "Command rejected by security policy".to_string());
+            log::warn!(
+                "[Audit] Rejected dangerous or malformed command for server '{}': {}",
+                server_id,
+                reason
+            );
+            return Err(anyhow!("Command rejected by security policy: {}", reason));
         }
 
-        let server = self.db.get_server(server_id)?.ok_or_else(|| anyhow!("Server not found"))?;
-        let (requires_approval, explanation, impact) = Self::classify_command(command);
+        let server = self
+            .db
+            .get_server(server_id)?
+            .ok_or_else(|| anyhow!("Server not found"))?;
 
-        if requires_approval {
+        if classification.requires_approval {
             let approval_id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().timestamp();
             let approval = PendingCommandApproval {
                 id: approval_id.clone(),
                 server_id: server_id.to_string(),
                 server_name: server.name.clone(),
-                command: command.to_string(),
-                explanation: explanation.to_string(),
-                impact: impact.to_string(),
+                command: classification.normalized_command.clone(),
+                command_hash: classification.command_hash.clone(),
+                explanation: classification.explanation.to_string(),
+                impact: classification.impact.to_string(),
                 created_at: now,
                 expires_at: now + 300,
             };
@@ -1444,6 +1774,12 @@ impl McpToolEngine {
                 apps.insert(approval_id.clone(), approval.clone());
             }
 
+            log::info!(
+                "[Audit] Command approval requested: approval_id={}, server_id={}, command='{}'",
+                approval_id,
+                server_id,
+                classification.normalized_command
+            );
             let _ = self.app_handle.emit("console-command-requested", &approval);
 
             return Ok(json!({
@@ -1451,24 +1787,30 @@ impl McpToolEngine {
                 "approval_id": approval_id,
                 "server_id": server_id,
                 "server_name": server.name,
-                "command": command,
-                "explanation": explanation,
-                "impact": impact,
+                "command": classification.normalized_command,
+                "explanation": classification.explanation,
+                "impact": classification.impact,
                 "requires_user_approval": true,
-                "message": format!("The command '{}' requires explicit user approval before execution.", command)
+                "message": format!("The command '{}' requires explicit user approval before execution.", classification.normalized_command)
             }));
         }
 
-        // Auto-approved command
-        self.lifecycle.send_command(server_id, command)?;
+        // Auto-approved read-only query
+        log::info!(
+            "[Audit] Read-only command auto-approved: server_id={}, command='{}'",
+            server_id,
+            classification.normalized_command
+        );
+        self.lifecycle
+            .send_command(server_id, &classification.normalized_command)?;
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         Ok(json!({
             "status": "executed",
             "server_id": server_id,
-            "command": command,
+            "command": classification.normalized_command,
             "success": true,
-            "output": format!("Sent command '{}' to server console", command)
+            "output": format!("Sent command '{}' to server console", classification.normalized_command)
         }))
     }
 
@@ -1496,14 +1838,25 @@ impl McpToolEngine {
         for line in content.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("Description:") {
-                description = trimmed.trim_start_matches("Description:").trim().to_string();
+                description = trimmed
+                    .trim_start_matches("Description:")
+                    .trim()
+                    .to_string();
             } else if trimmed.starts_with("Minecraft Version:") {
-                mc_version = trimmed.trim_start_matches("Minecraft Version:").trim().to_string();
+                mc_version = trimmed
+                    .trim_start_matches("Minecraft Version:")
+                    .trim()
+                    .to_string();
             } else if trimmed.starts_with("Java Version:") {
-                java_version = trimmed.trim_start_matches("Java Version:").trim().to_string();
+                java_version = trimmed
+                    .trim_start_matches("Java Version:")
+                    .trim()
+                    .to_string();
             } else if trimmed.starts_with("Caused by:") {
                 caused_by.push(trimmed.trim_start_matches("Caused by:").trim().to_string());
-            } else if trimmed.contains("Exception:") || (trimmed.starts_with("java.lang.") && exception.is_empty()) {
+            } else if trimmed.contains("Exception:")
+                || (trimmed.starts_with("java.lang.") && exception.is_empty())
+            {
                 if exception.is_empty() {
                     exception = trimmed.to_string();
                 }
@@ -1531,11 +1884,17 @@ impl McpToolEngine {
         })
     }
 
-    async fn tool_inspect_crash_report(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_inspect_crash_report(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let server = self.db.get_server(server_id)?.ok_or_else(|| anyhow!("Server not found"))?;
+        let server = self
+            .db
+            .get_server(server_id)?
+            .ok_or_else(|| anyhow!("Server not found"))?;
         let server_dir = PathBuf::from(&server.server_dir);
         let crash_dir = server_dir.join("crash-reports");
 
@@ -1545,7 +1904,10 @@ impl McpToolEngine {
                 for entry in entries.filter_map(Result::ok) {
                     let p = entry.path();
                     if p.is_file() && p.extension().map(|e| e == "txt").unwrap_or(false) {
-                        let mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+                        let mtime = entry
+                            .metadata()
+                            .and_then(|m| m.modified())
+                            .unwrap_or(std::time::UNIX_EPOCH);
                         crash_files.push((p, mtime));
                     }
                 }
@@ -1554,7 +1916,10 @@ impl McpToolEngine {
 
             if let Some((latest_path, _)) = crash_files.first() {
                 let content = std::fs::read_to_string(latest_path).unwrap_or_default();
-                let summary = Self::parse_crash_report(&content, latest_path.file_name().unwrap().to_string_lossy().as_ref());
+                let summary = Self::parse_crash_report(
+                    &content,
+                    latest_path.file_name().unwrap().to_string_lossy().as_ref(),
+                );
                 return Ok(summary);
             }
         }
@@ -1563,7 +1928,11 @@ impl McpToolEngine {
         let logs = self.lifecycle.get_logs(server_id);
         let mut error_lines: Vec<String> = Vec::new();
         for line in logs.iter().rev().take(100) {
-            if line.contains("ERROR") || line.contains("Exception") || line.contains("FATAL") || line.contains("Caused by") {
+            if line.contains("ERROR")
+                || line.contains("Exception")
+                || line.contains("FATAL")
+                || line.contains("Caused by")
+            {
                 error_lines.push(line.clone());
                 if error_lines.len() >= 15 {
                     break;
@@ -1591,7 +1960,10 @@ impl McpToolEngine {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let server = self.db.get_server(server_id)?.ok_or_else(|| anyhow!("Server not found"))?;
+        let server = self
+            .db
+            .get_server(server_id)?
+            .ok_or_else(|| anyhow!("Server not found"))?;
         let status = self.lifecycle.get_status(server_id, server.port);
         let server_dir = PathBuf::from(&server.server_dir);
 
@@ -1658,9 +2030,12 @@ impl McpToolEngine {
         )
         .await?;
 
-        let latest_ver = versions
-            .first()
-            .ok_or_else(|| anyhow!("No compatible versions found on Modrinth for {}", project_id))?;
+        let latest_ver = versions.first().ok_or_else(|| {
+            anyhow!(
+                "No compatible versions found on Modrinth for {}",
+                project_id
+            )
+        })?;
 
         let primary_file = latest_ver
             .files
@@ -1669,12 +2044,9 @@ impl McpToolEngine {
             .or_else(|| latest_ver.files.first())
             .ok_or_else(|| anyhow!("No downloadable file found for version"))?;
 
-        let installed_file = ExtensionManager::download_and_install(
-            &server_dir,
-            &server.server_type,
-            primary_file,
-        )
-        .await?;
+        let installed_file =
+            ExtensionManager::download_and_install(&server_dir, &server.server_type, primary_file)
+                .await?;
 
         Ok(json!({
             "installed_file": installed_file,
@@ -1733,13 +2105,17 @@ impl McpToolEngine {
         if let Err(e) = std::net::TcpListener::bind(("0.0.0.0", server.port)) {
             return Err(anyhow!(
                 "Port conflict: Port {} is currently in use by another application ({}).",
-                server.port, e
+                server.port,
+                e
             ));
         }
 
         self.lifecycle
             .start_server(self.app_handle.clone(), &server)?;
-        let _ = self.app_handle.emit("servers-changed", json!({ "action": "started", "server_id": server_id }));
+        let _ = self.app_handle.emit(
+            "servers-changed",
+            json!({ "action": "started", "server_id": server_id }),
+        );
         Ok(json!({ "status": "starting", "server_id": server_id, "port": server.port }))
     }
 
@@ -1748,7 +2124,10 @@ impl McpToolEngine {
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
         self.lifecycle.stop_server(server_id)?;
-        let _ = self.app_handle.emit("servers-changed", json!({ "action": "stopped", "server_id": server_id }));
+        let _ = self.app_handle.emit(
+            "servers-changed",
+            json!({ "action": "stopped", "server_id": server_id }),
+        );
         Ok(json!({ "status": "stopping", "server_id": server_id }))
     }
 
@@ -1763,11 +2142,17 @@ impl McpToolEngine {
 
         self.lifecycle
             .restart_server(self.app_handle.clone(), &server)?;
-        let _ = self.app_handle.emit("servers-changed", json!({ "action": "restarted", "server_id": server_id }));
+        let _ = self.app_handle.emit(
+            "servers-changed",
+            json!({ "action": "restarted", "server_id": server_id }),
+        );
         Ok(json!({ "status": "restarting", "server_id": server_id }))
     }
 
-    async fn tool_open_server_directory(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_open_server_directory(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
@@ -1783,15 +2168,21 @@ impl McpToolEngine {
 
         #[cfg(target_os = "windows")]
         {
-            std::process::Command::new("explorer").arg(&server.server_dir).spawn()?;
+            std::process::Command::new("explorer")
+                .arg(&server.server_dir)
+                .spawn()?;
         }
         #[cfg(target_os = "macos")]
         {
-            std::process::Command::new("open").arg(&server.server_dir).spawn()?;
+            std::process::Command::new("open")
+                .arg(&server.server_dir)
+                .spawn()?;
         }
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         {
-            std::process::Command::new("xdg-open").arg(&server.server_dir).spawn()?;
+            std::process::Command::new("xdg-open")
+                .arg(&server.server_dir)
+                .spawn()?;
         }
 
         Ok(json!({ "opened": server.server_dir, "success": true }))
@@ -1871,7 +2262,11 @@ impl McpToolEngine {
             let backup_dir = server_dir.join("backups");
             let _ = std::fs::create_dir_all(&backup_dir);
             let now = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-            let backup_path = backup_dir.join(format!("{}.bak.{}", relative_path.replace(['/', '\\'], "_"), now));
+            let backup_path = backup_dir.join(format!(
+                "{}.bak.{}",
+                relative_path.replace(['/', '\\'], "_"),
+                now
+            ));
             let _ = std::fs::copy(&validated, backup_path);
         }
 
@@ -1899,7 +2294,10 @@ impl McpToolEngine {
                 }
             }
             self.db.delete_server(server_id)?;
-            let _ = self.app_handle.emit("servers-changed", json!({ "action": "deleted", "server_id": server_id }));
+            let _ = self.app_handle.emit(
+                "servers-changed",
+                json!({ "action": "deleted", "server_id": server_id }),
+            );
             Ok(json!({ "deleted_server_id": server_id, "name": server.name, "success": true }))
         } else {
             Err(anyhow!("Server with ID '{}' not found", server_id))
@@ -1907,15 +2305,27 @@ impl McpToolEngine {
     }
 
     async fn tool_create_server(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
-        let name = args["name"].as_str().ok_or_else(|| anyhow!("Missing 'name'"))?;
-        let st_str = args["server_type"].as_str().ok_or_else(|| anyhow!("Missing 'server_type'"))?;
-        let raw_version = args["minecraft_version"].as_str().ok_or_else(|| anyhow!("Missing 'minecraft_version'"))?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'name'"))?;
+        let st_str = args["server_type"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'server_type'"))?;
+        let raw_version = args["minecraft_version"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'minecraft_version'"))?;
 
         let desired_port = args.get("port").and_then(|v| v.as_u64()).unwrap_or(25565) as u16;
         let (final_port, was_reassigned) = Self::find_available_port(desired_port);
 
-        let min_ram = args.get("min_ram_mb").and_then(|v| v.as_u64()).unwrap_or(1024) as u32;
-        let max_ram = args.get("max_ram_mb").and_then(|v| v.as_u64()).unwrap_or(2048) as u32;
+        let min_ram = args
+            .get("min_ram_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1024) as u32;
+        let max_ram = args
+            .get("max_ram_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2048) as u32;
 
         SecurityPolicy::validate_server_name(name)?;
         SecurityPolicy::validate_port(final_port)?;
@@ -1933,7 +2343,9 @@ impl McpToolEngine {
             other => return Err(anyhow!("Unsupported server_type: '{}'", other)),
         };
 
-        let target_version = if raw_version.eq_ignore_ascii_case("latest") || raw_version.eq_ignore_ascii_case("latest release") {
+        let target_version = if raw_version.eq_ignore_ascii_case("latest")
+            || raw_version.eq_ignore_ascii_case("latest release")
+        {
             let manifest = self.software_manager.get_version_manifest(false).await?;
             manifest.latest.release
         } else {
@@ -1941,23 +2353,27 @@ impl McpToolEngine {
         };
 
         let id = uuid::Uuid::new_v4().to_string();
-        let sanitized_name = name.to_lowercase().replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
+        let sanitized_name = name
+            .to_lowercase()
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "_");
 
         let data_dir = dirs::data_dir()
             .map(|p| p.join("mcset"))
             .unwrap_or_else(|| std::env::current_dir().unwrap().join(".mcset_data"));
-        let server_dir = data_dir.join("servers").join(format!("{}_{}", sanitized_name, &id[..8]));
+        let server_dir = data_dir
+            .join("servers")
+            .join(format!("{}_{}", sanitized_name, &id[..8]));
         std::fs::create_dir_all(&server_dir)?;
 
-        let build_info = self.software_manager.resolve_provider_build(&server_type, &target_version).await?;
+        let build_info = self
+            .software_manager
+            .resolve_provider_build(&server_type, &target_version)
+            .await?;
         let jar_file = build_info.target_jar.clone();
 
-        self.software_manager.download_and_install(
-            None,
-            &server_dir,
-            &build_info,
-            None,
-        ).await?;
+        self.software_manager
+            .download_and_install(None, &server_dir, &build_info, None)
+            .await?;
 
         let props_path = server_dir.join("server.properties");
         let initial_props = format!(
@@ -1967,7 +2383,10 @@ impl McpToolEngine {
         let _ = std::fs::write(&props_path, initial_props);
 
         let eula_path = server_dir.join("eula.txt");
-        let _ = std::fs::write(&eula_path, "# By changing the setting below to TRUE you are indicating your agreement to our EULA\neula=true\n");
+        let _ = std::fs::write(
+            &eula_path,
+            "# By changing the setting below to TRUE you are indicating your agreement to our EULA\neula=true\n",
+        );
 
         let now = chrono::Utc::now().timestamp();
         let profile = ServerProfile {
@@ -1989,10 +2408,16 @@ impl McpToolEngine {
         };
 
         self.db.insert_server(&profile)?;
-        let _ = self.app_handle.emit("servers-changed", json!({ "action": "created", "server": profile }));
+        let _ = self.app_handle.emit(
+            "servers-changed",
+            json!({ "action": "created", "server": profile }),
+        );
 
         let port_notice = if was_reassigned {
-            format!("Requested port {} was already in use. Automatically assigned port {}.", desired_port, final_port)
+            format!(
+                "Requested port {} was already in use. Automatically assigned port {}.",
+                desired_port, final_port
+            )
         } else {
             format!("Port {} is active.", final_port)
         };
@@ -2005,9 +2430,18 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_get_available_versions(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
-        let force = args.get("force_refresh").and_then(|v| v.as_bool()).unwrap_or(false);
-        let category = args.get("category").and_then(|v| v.as_str()).unwrap_or("release");
+    async fn tool_get_available_versions(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let force = args
+            .get("force_refresh")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let category = args
+            .get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("release");
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(25) as usize;
 
         let manifest = self.software_manager.get_version_manifest(force).await?;
@@ -2031,31 +2465,48 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_get_public_access_status(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_get_public_access_status(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let server = self.db.get_server(server_id)?
+        let server = self
+            .db
+            .get_server(server_id)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_id))?;
         let status = self.portal_manager.get_status(server_id, server.port);
         Ok(serde_json::to_value(&status)?)
     }
 
-    async fn tool_enable_public_access(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_enable_public_access(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let server = self.db.get_server(server_id)?
+        let server = self
+            .db
+            .get_server(server_id)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_id))?;
-        let status = self.portal_manager.start_tunnel(self.app_handle.clone(), &server)?;
+        let status = self
+            .portal_manager
+            .start_tunnel(self.app_handle.clone(), &server)?;
         Ok(serde_json::to_value(&status)?)
     }
 
-    async fn tool_get_public_access_endpoint(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_get_public_access_endpoint(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let server = self.db.get_server(server_id)?
+        let server = self
+            .db
+            .get_server(server_id)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_id))?;
         let status = self.portal_manager.get_status(server_id, server.port);
         Ok(json!({
@@ -2068,43 +2519,60 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_disable_public_access(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_disable_public_access(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let status = self.portal_manager.stop_tunnel(server_id, Some(&self.app_handle));
+        let status = self
+            .portal_manager
+            .stop_tunnel(server_id, Some(&self.app_handle));
         Ok(serde_json::to_value(&status)?)
     }
 
     async fn tool_search_modpacks(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
-        let query = args["query"].as_str().ok_or_else(|| anyhow!("Missing 'query'"))?;
-        let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("modrinth");
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'query'"))?;
+        let provider = args
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("modrinth");
         let mc_version = args.get("minecraft_version").and_then(|v| v.as_str());
         let loader = args.get("loader").and_then(|v| v.as_str()).unwrap_or("all");
         let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(8) as u32;
 
-        let results = self.modpack_manager.search_modpacks(
-            provider,
-            query,
-            mc_version,
-            if loader == "all" { None } else { Some(loader) },
-            0,
-            limit,
-            None,
-        ).await?;
+        let results = self
+            .modpack_manager
+            .search_modpacks(
+                provider,
+                query,
+                mc_version,
+                if loader == "all" { None } else { Some(loader) },
+                0,
+                limit,
+                None,
+            )
+            .await?;
 
-        let hits: Vec<serde_json::Value> = results.hits.into_iter().map(|h| {
-            json!({
-                "id": h.id,
-                "title": h.title,
-                "slug": h.slug,
-                "description": h.description,
-                "author": h.author,
-                "loaders": h.loaders,
-                "game_versions": h.game_versions,
-                "downloads": h.downloads,
+        let hits: Vec<serde_json::Value> = results
+            .hits
+            .into_iter()
+            .map(|h| {
+                json!({
+                    "id": h.id,
+                    "title": h.title,
+                    "slug": h.slug,
+                    "description": h.description,
+                    "author": h.author,
+                    "loaders": h.loaders,
+                    "game_versions": h.game_versions,
+                    "downloads": h.downloads,
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(json!({
             "provider": provider,
@@ -2114,24 +2582,39 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_get_modpack_versions(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
-        let project_id = args["project_id"].as_str().ok_or_else(|| anyhow!("Missing 'project_id'"))?;
-        let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("modrinth");
+    async fn tool_get_modpack_versions(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let project_id = args["project_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'project_id'"))?;
+        let provider = args
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("modrinth");
 
-        let versions = self.modpack_manager.get_modpack_versions(provider, project_id, None).await?;
-        let vers_json: Vec<serde_json::Value> = versions.into_iter().take(15).map(|v| {
-            json!({
-                "id": v.id,
-                "name": v.name,
-                "version_number": v.version_number,
-                "game_versions": v.game_versions,
-                "loaders": v.loaders,
-                "date_published": v.date_published,
-                "server_pack_available": v.server_pack_available,
-                "filename": v.filename,
-                "file_size": v.file_size,
+        let versions = self
+            .modpack_manager
+            .get_modpack_versions(provider, project_id, None)
+            .await?;
+        let vers_json: Vec<serde_json::Value> = versions
+            .into_iter()
+            .take(15)
+            .map(|v| {
+                json!({
+                    "id": v.id,
+                    "name": v.name,
+                    "version_number": v.version_number,
+                    "game_versions": v.game_versions,
+                    "loaders": v.loaders,
+                    "date_published": v.date_published,
+                    "server_pack_available": v.server_pack_available,
+                    "filename": v.filename,
+                    "file_size": v.file_size,
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(json!({
             "provider": provider,
@@ -2141,48 +2624,88 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_install_modpack_server(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
-        let name = args["name"].as_str().ok_or_else(|| anyhow!("Missing 'name'"))?;
-        let project_id = args["project_id"].as_str().ok_or_else(|| anyhow!("Missing 'project_id'"))?;
-        let provider = args.get("provider").and_then(|v| v.as_str()).unwrap_or("modrinth");
+    async fn tool_install_modpack_server(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'name'"))?;
+        let project_id = args["project_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'project_id'"))?;
+        let provider = args
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("modrinth");
         let version_id_arg = args.get("version_id").and_then(|v| v.as_str());
         let mc_version_arg = args.get("minecraft_version").and_then(|v| v.as_str());
         let loader_arg = args.get("loader").and_then(|v| v.as_str());
         let desired_port = args.get("port").and_then(|v| v.as_u64()).unwrap_or(25565) as u16;
         let (port, was_conflict) = Self::find_available_port(desired_port);
-        let min_ram = args.get("min_ram_mb").and_then(|v| v.as_u64()).unwrap_or(2048) as u32;
-        let max_ram = args.get("max_ram_mb").and_then(|v| v.as_u64()).unwrap_or(4096) as u32;
+        let min_ram = args
+            .get("min_ram_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2048) as u32;
+        let max_ram = args
+            .get("max_ram_mb")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(4096) as u32;
 
-        let eula_accepted = args.get("eula_accepted").and_then(|v| v.as_bool()).unwrap_or(false);
+        let eula_accepted = args
+            .get("eula_accepted")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if !eula_accepted {
-            return Err(anyhow!("Minecraft EULA must be accepted (eula_accepted: true) to install server."));
+            return Err(anyhow!(
+                "Minecraft EULA must be accepted (eula_accepted: true) to install server."
+            ));
         }
 
         // Fetch versions to resolve version and primary download URL
-        let versions = self.modpack_manager.get_modpack_versions(provider, project_id, None).await?;
+        let versions = self
+            .modpack_manager
+            .get_modpack_versions(provider, project_id, None)
+            .await?;
         if versions.is_empty() {
-            return Err(anyhow!("No versions found for modpack project '{}' on {}", project_id, provider));
+            return Err(anyhow!(
+                "No versions found for modpack project '{}' on {}",
+                project_id,
+                provider
+            ));
         }
 
         let selected_v = match version_id_arg {
-            Some(vid) => versions.iter().find(|v| v.id == vid).cloned().ok_or_else(|| anyhow!("Version '{}' not found", vid))?,
+            Some(vid) => versions
+                .iter()
+                .find(|v| v.id == vid)
+                .cloned()
+                .ok_or_else(|| anyhow!("Version '{}' not found", vid))?,
             None => {
                 // Find version matching loader or mc_version if specified
-                versions.iter().find(|v| {
-                    let loader_match = match loader_arg {
-                        Some(l) => v.loaders.iter().any(|item| item.eq_ignore_ascii_case(l)),
-                        None => true,
-                    };
-                    let mc_match = match mc_version_arg {
-                        Some(mc) => v.game_versions.iter().any(|item| item == mc),
-                        None => true,
-                    };
-                    loader_match && mc_match
-                }).cloned().unwrap_or_else(|| versions[0].clone())
+                versions
+                    .iter()
+                    .find(|v| {
+                        let loader_match = match loader_arg {
+                            Some(l) => v.loaders.iter().any(|item| item.eq_ignore_ascii_case(l)),
+                            None => true,
+                        };
+                        let mc_match = match mc_version_arg {
+                            Some(mc) => v.game_versions.iter().any(|item| item == mc),
+                            None => true,
+                        };
+                        loader_match && mc_match
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| versions[0].clone())
             }
         };
 
-        let download_url = selected_v.files.first().map(|f| f.url.clone()).unwrap_or_else(|| selected_v.download_url.clone());
+        let download_url = selected_v
+            .files
+            .first()
+            .map(|f| f.url.clone())
+            .unwrap_or_else(|| selected_v.download_url.clone());
         let install_id = format!("ai-install-{}", chrono::Utc::now().timestamp_millis());
 
         let req = crate::models::InstallModpackRequest {
@@ -2204,9 +2727,15 @@ impl McpToolEngine {
             online_mode: Some(true),
         };
 
-        let profile = self.modpack_manager.install_modpack_server(self.app_handle.clone(), req).await?;
+        let profile = self
+            .modpack_manager
+            .install_modpack_server(self.app_handle.clone(), req)
+            .await?;
         self.db.insert_server(&profile)?;
-        let _ = self.app_handle.emit("servers-changed", json!({ "action": "created", "server": profile.clone() }));
+        let _ = self.app_handle.emit(
+            "servers-changed",
+            json!({ "action": "created", "server": profile.clone() }),
+        );
 
         Ok(json!({
             "status": "success",
@@ -2223,13 +2752,23 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_download_java_runtime(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
-        let major = args["major_version"].as_u64().ok_or_else(|| anyhow!("Missing 'major_version'"))? as u32;
+    async fn tool_download_java_runtime(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let major = args["major_version"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing 'major_version'"))? as u32;
         let data_dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("mcset");
 
-        let runtime = crate::java_manager::JavaManager::download_and_install_jdk(&data_dir, major, Some(&self.app_handle)).await?;
+        let runtime = crate::java_manager::JavaManager::download_and_install_jdk(
+            &data_dir,
+            major,
+            Some(&self.app_handle),
+        )
+        .await?;
         Ok(json!({
             "status": "installed",
             "major_version": runtime.major_version,
@@ -2239,11 +2778,21 @@ impl McpToolEngine {
         }))
     }
 
-    async fn tool_auto_fix_server_java(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
-        let server_id = args["server_id"].as_str().ok_or_else(|| anyhow!("Missing 'server_id'"))?;
-        let target_major = args.get("target_major").and_then(|v| v.as_u64()).map(|v| v as u32);
+    async fn tool_auto_fix_server_java(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let server_id = args["server_id"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
+        let target_major = args
+            .get("target_major")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
 
-        let mut profile = self.db.get_server(server_id)?
+        let mut profile = self
+            .db
+            .get_server(server_id)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_id))?;
 
         let _ = self.lifecycle.stop_server(server_id);
@@ -2251,10 +2800,17 @@ impl McpToolEngine {
         let required_major = match target_major {
             Some(m) => m,
             None => {
-                if let Ok(m) = self.software_manager.get_required_java_version(&profile.minecraft_version).await {
+                if let Ok(m) = self
+                    .software_manager
+                    .get_required_java_version(&profile.minecraft_version)
+                    .await
+                {
                     m
                 } else {
-                    crate::java_manager::JavaManager::get_recommended_java_major(&profile.minecraft_version).1
+                    crate::java_manager::JavaManager::get_recommended_java_major(
+                        &profile.minecraft_version,
+                    )
+                    .1
                 }
             }
         };
@@ -2263,18 +2819,25 @@ impl McpToolEngine {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("mcset");
 
-        let installed_java_path = crate::java_manager::JavaManager::find_or_install_compatible_java(
-            &data_dir,
-            &profile.minecraft_version,
-            Some(&self.app_handle),
-        ).await?;
+        let installed_java_path =
+            crate::java_manager::JavaManager::find_or_install_compatible_java(
+                &data_dir,
+                &profile.minecraft_version,
+                Some(&self.app_handle),
+            )
+            .await?;
 
         profile.java_path = Some(installed_java_path.clone());
         profile.updated_at = chrono::Utc::now().timestamp();
         self.db.update_server(&profile)?;
-        let _ = self.app_handle.emit("servers-changed", json!({ "action": "updated", "server": profile.clone() }));
+        let _ = self.app_handle.emit(
+            "servers-changed",
+            json!({ "action": "updated", "server": profile.clone() }),
+        );
 
-        let _ = self.lifecycle.start_server(self.app_handle.clone(), &profile);
+        let _ = self
+            .lifecycle
+            .start_server(self.app_handle.clone(), &profile);
 
         Ok(json!({
             "status": "repaired",
@@ -2285,7 +2848,17 @@ impl McpToolEngine {
         }))
     }
     /// Extracts performance indicators (overload count, max/total ms behind, memory errors, TPS lines) from server logs
-    pub fn parse_log_performance_indicators(logs: &[String]) -> (usize, u64, u64, Vec<String>, Vec<String>, Option<String>, Option<String>) {
+    pub fn parse_log_performance_indicators(
+        logs: &[String],
+    ) -> (
+        usize,
+        u64,
+        u64,
+        Vec<String>,
+        Vec<String>,
+        Option<String>,
+        Option<String>,
+    ) {
         let mut overload_count = 0;
         let mut max_overload_ms: u64 = 0;
         let mut total_overload_ms: u64 = 0;
@@ -2294,9 +2867,12 @@ impl McpToolEngine {
         let mut measured_tps_line: Option<String> = None;
         let mut measured_tick_time_line: Option<String> = None;
 
-        let overload_re = regex::Regex::new(r"Can't keep up!.*Running\s+(\d+)ms\s+or\s+(\d+)\s+ticks\s+behind").ok();
+        let overload_re =
+            regex::Regex::new(r"Can't keep up!.*Running\s+(\d+)ms\s+or\s+(\d+)\s+ticks\s+behind")
+                .ok();
         let tps_re = regex::Regex::new(r"TPS from last 1m,\s*5m,\s*15m:\s*([0-9.,\s*]+)").ok();
-        let tick_query_re = regex::Regex::new(r"(The target tick rate is|Current tick time:?)\s*(.*)").ok();
+        let tick_query_re =
+            regex::Regex::new(r"(The target tick rate is|Current tick time:?)\s*(.*)").ok();
 
         for line in logs.iter().rev().take(300) {
             let lower = line.to_lowercase();
@@ -2339,10 +2915,21 @@ impl McpToolEngine {
             }
         }
 
-        (overload_count, max_overload_ms, total_overload_ms, recent_overload_snippets, memory_errors, measured_tps_line, measured_tick_time_line)
+        (
+            overload_count,
+            max_overload_ms,
+            total_overload_ms,
+            recent_overload_snippets,
+            memory_errors,
+            measured_tps_line,
+            measured_tick_time_line,
+        )
     }
 
-    async fn tool_diagnose_server_performance(&self, args: &serde_json::Value) -> Result<serde_json::Value> {
+    async fn tool_diagnose_server_performance(
+        &self,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
         let server_id = args["server_id"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing 'server_id'"))?;
@@ -2351,7 +2938,10 @@ impl McpToolEngine {
             .get_server(server_id)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_id))?;
         let status = self.lifecycle.get_status(server_id, server.port);
-        let measure_live = args.get("measure_live_tps").and_then(|v| v.as_bool()).unwrap_or(true);
+        let measure_live = args
+            .get("measure_live_tps")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
         let max_ram_mb = server.max_ram_mb;
         let memory_used_mb = status.memory_used_mb.unwrap_or(0);
@@ -2363,8 +2953,15 @@ impl McpToolEngine {
         let cpu_percent = status.cpu_percent.unwrap_or(0.0);
 
         let logs = self.lifecycle.get_logs(server_id);
-        let (overload_count, max_overload_ms, total_overload_ms, recent_overload_snippets, memory_errors, mut measured_tps_line, mut measured_tick_time_line) =
-            Self::parse_log_performance_indicators(&logs);
+        let (
+            overload_count,
+            max_overload_ms,
+            total_overload_ms,
+            recent_overload_snippets,
+            memory_errors,
+            mut measured_tps_line,
+            mut measured_tick_time_line,
+        ) = Self::parse_log_performance_indicators(&logs);
 
         // If server is running and live measurement requested, poll tps or tick query
         if measure_live && matches!(status.state, ServerStatusState::Running) {
@@ -2373,7 +2970,8 @@ impl McpToolEngine {
                 let _ = self.lifecycle.send_command(server_id, "tps");
                 tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                 let new_logs = self.lifecycle.get_logs(server_id);
-                let (_, _, _, _, _, polled_tps, _) = Self::parse_log_performance_indicators(&new_logs);
+                let (_, _, _, _, _, polled_tps, _) =
+                    Self::parse_log_performance_indicators(&new_logs);
                 if polled_tps.is_some() {
                     measured_tps_line = polled_tps;
                 }
@@ -2381,7 +2979,8 @@ impl McpToolEngine {
                 let _ = self.lifecycle.send_command(server_id, "tick query");
                 tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
                 let new_logs = self.lifecycle.get_logs(server_id);
-                let (_, _, _, _, _, _, polled_tick) = Self::parse_log_performance_indicators(&new_logs);
+                let (_, _, _, _, _, _, polled_tick) =
+                    Self::parse_log_performance_indicators(&new_logs);
                 if polled_tick.is_some() {
                     measured_tick_time_line = polled_tick;
                 }
@@ -2398,7 +2997,8 @@ impl McpToolEngine {
         let estimated_tps: f64 = if !matches!(status.state, ServerStatusState::Running) {
             0.0
         } else if let Some(ref tps_str) = measured_tps_line {
-            tps_str.split(',')
+            tps_str
+                .split(',')
                 .next()
                 .and_then(|s| s.trim().trim_start_matches('*').parse::<f64>().ok())
                 .unwrap_or(20.0)
@@ -2427,8 +3027,12 @@ impl McpToolEngine {
                         match k.trim() {
                             "view-distance" => view_distance = v.trim().parse().ok(),
                             "simulation-distance" => simulation_distance = v.trim().parse().ok(),
-                            "entity-broadcast-range-percentage" => entity_broadcast_range = v.trim().parse().ok(),
-                            "network-compression-threshold" => network_compression_threshold = v.trim().parse().ok(),
+                            "entity-broadcast-range-percentage" => {
+                                entity_broadcast_range = v.trim().parse().ok()
+                            }
+                            "network-compression-threshold" => {
+                                network_compression_threshold = v.trim().parse().ok()
+                            }
                             _ => {}
                         }
                     }
@@ -2436,15 +3040,24 @@ impl McpToolEngine {
             }
         }
 
-        let installed = ExtensionManager::list_installed(&server_dir, &server.server_type).unwrap_or_default();
-        let installed_names: Vec<String> = installed.iter().map(|e| e.name.to_lowercase()).collect();
+        let installed =
+            ExtensionManager::list_installed(&server_dir, &server.server_type).unwrap_or_default();
+        let installed_names: Vec<String> =
+            installed.iter().map(|e| e.name.to_lowercase()).collect();
 
         let mut detected_optimizations = Vec::new();
         let mut missing_recommended = Vec::new();
 
         let st_lower = format!("{:?}", server.server_type).to_lowercase();
         if st_lower.contains("fabric") {
-            let fabric_opt_list = ["lithium", "ferritecore", "krypton", "c2me", "modernfix", "memoryleakfix"];
+            let fabric_opt_list = [
+                "lithium",
+                "ferritecore",
+                "krypton",
+                "c2me",
+                "modernfix",
+                "memoryleakfix",
+            ];
             for opt in &fabric_opt_list {
                 if installed_names.iter().any(|n| n.contains(opt)) {
                     detected_optimizations.push(opt.to_string());
@@ -2452,7 +3065,10 @@ impl McpToolEngine {
                     missing_recommended.push(opt.to_string());
                 }
             }
-        } else if st_lower.contains("paper") || st_lower.contains("purpur") || st_lower.contains("spigot") {
+        } else if st_lower.contains("paper")
+            || st_lower.contains("purpur")
+            || st_lower.contains("spigot")
+        {
             let paper_opt_list = ["spark", "chunky", "viewdistancetweaks"];
             for opt in &paper_opt_list {
                 if installed_names.iter().any(|n| n.contains(opt)) {
@@ -2493,7 +3109,8 @@ impl McpToolEngine {
             }));
             recommendations.push(format!(
                 "Increase allocated RAM from {}MB to at least {}MB.",
-                max_ram_mb, (max_ram_mb + 2048).max(4096)
+                max_ram_mb,
+                (max_ram_mb + 2048).max(4096)
             ));
         }
 
@@ -2508,7 +3125,8 @@ impl McpToolEngine {
             }));
             recommendations.push(format!(
                 "Allocate more RAM to the server (currently {}MB). Recommended: {}MB.",
-                max_ram_mb, (max_ram_mb + 2048).max(4096)
+                max_ram_mb,
+                (max_ram_mb + 2048).max(4096)
             ));
         } else if max_ram_mb < 3072 {
             bottlenecks.push(json!({
@@ -2519,7 +3137,10 @@ impl McpToolEngine {
                     max_ram_mb
                 )
             }));
-            recommendations.push("Increase allocated RAM to 4096MB in Server Settings for optimal performance.".to_string());
+            recommendations.push(
+                "Increase allocated RAM to 4096MB in Server Settings for optimal performance."
+                    .to_string(),
+            );
         }
 
         if cpu_percent > 85.0 && matches!(status.state, ServerStatusState::Running) {
@@ -2564,22 +3185,28 @@ impl McpToolEngine {
         if !detected_optimizations.iter().any(|m| m == "lithium") && st_lower.contains("fabric") {
             recommendations.push("Install 'Lithium' mod via 'install_plugin' (Modrinth slug: 'lithium') for general 30-40% server tick optimization without altering vanilla mechanics.".to_string());
         }
-        if !detected_optimizations.iter().any(|m| m == "ferritecore") && st_lower.contains("fabric") {
+        if !detected_optimizations.iter().any(|m| m == "ferritecore") && st_lower.contains("fabric")
+        {
             recommendations.push("Install 'FerriteCore' mod via 'install_plugin' (Modrinth slug: 'ferrite-core') to significantly reduce Java memory consumption.".to_string());
         }
-        if !detected_optimizations.iter().any(|m| m == "spark") && (st_lower.contains("paper") || st_lower.contains("purpur") || st_lower.contains("spigot")) {
+        if !detected_optimizations.iter().any(|m| m == "spark")
+            && (st_lower.contains("paper")
+                || st_lower.contains("purpur")
+                || st_lower.contains("spigot"))
+        {
             recommendations.push("Install 'spark' profiler plugin via 'install_plugin' (Modrinth slug: 'spark') to pinpoint exact laggy entities, chunk coordinates, or event listeners.".to_string());
         }
 
-        let overall_health = if estimated_tps >= 19.5 && overload_count == 0 && memory_percent < 80.0 {
-            "EXCELLENT (20.0 TPS stable, healthy tick rate)"
-        } else if estimated_tps >= 18.0 && overload_count < 3 {
-            "GOOD (Minor occasional tick dips)"
-        } else if estimated_tps >= 14.0 || overload_count < 10 {
-            "MODERATE LAG (Sub-optimal TPS, noticeable rubber-banding or tick delay)"
-        } else {
-            "SEVERE LAG (Low TPS, frequent tick overloads, severe delay or stutter)"
-        };
+        let overall_health =
+            if estimated_tps >= 19.5 && overload_count == 0 && memory_percent < 80.0 {
+                "EXCELLENT (20.0 TPS stable, healthy tick rate)"
+            } else if estimated_tps >= 18.0 && overload_count < 3 {
+                "GOOD (Minor occasional tick dips)"
+            } else if estimated_tps >= 14.0 || overload_count < 10 {
+                "MODERATE LAG (Sub-optimal TPS, noticeable rubber-banding or tick delay)"
+            } else {
+                "SEVERE LAG (Low TPS, frequent tick overloads, severe delay or stutter)"
+            };
 
         Ok(json!({
             "server_id": server.id,
@@ -2622,10 +3249,75 @@ impl McpToolEngine {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_and_classify_adversarial_cases() {
+        // 1. Multi-line injection attempts MUST be rejected
+        let multi_nl = McpToolEngine::normalize_and_classify_command("list\nstop");
+        assert!(multi_nl.is_rejected);
+        assert!(multi_nl.rejection_reason.unwrap().contains("Multi-line"));
+
+        let multi_cr = McpToolEngine::normalize_and_classify_command("list\r\nop attacker");
+        assert!(multi_cr.is_rejected);
+
+        // 2. Chained command operators MUST be rejected
+        let chained_semi = McpToolEngine::normalize_and_classify_command("list; op attacker");
+        assert!(chained_semi.is_rejected);
+
+        let chained_and = McpToolEngine::normalize_and_classify_command("list && stop");
+        assert!(chained_and.is_rejected);
+
+        let chained_pipe = McpToolEngine::normalize_and_classify_command("list | kill @a");
+        assert!(chained_pipe.is_rejected);
+
+        // 3. Null bytes MUST be rejected
+        let null_byte = McpToolEngine::normalize_and_classify_command("list\0stop");
+        assert!(null_byte.is_rejected);
+
+        // 4. Leading / trailing whitespace, tabs, and leading slash
+        let padded = McpToolEngine::normalize_and_classify_command("   /list   ");
+        assert!(!padded.requires_approval);
+        assert_eq!(padded.normalized_command, "list");
+
+        let tabbed = McpToolEngine::normalize_and_classify_command("\t/tps\t");
+        assert!(!tabbed.requires_approval);
+        assert_eq!(tabbed.normalized_command, "tps");
+
+        // 5. Mixed case
+        let mixed_list = McpToolEngine::normalize_and_classify_command("LiSt");
+        assert!(!mixed_list.requires_approval);
+        assert_eq!(mixed_list.normalized_command, "LiSt");
+
+        let mixed_op = McpToolEngine::normalize_and_classify_command("oP StEvE");
+        assert!(mixed_op.requires_approval);
+        assert_eq!(mixed_op.normalized_command, "oP StEvE");
+
+        // 6. Namespaced commands
+        let ns_list = McpToolEngine::normalize_and_classify_command("minecraft:list");
+        assert!(!ns_list.requires_approval);
+
+        let ns_op = McpToolEngine::normalize_and_classify_command("minecraft:op attacker");
+        assert!(ns_op.requires_approval);
+
+        let bukkit_reload = McpToolEngine::normalize_and_classify_command("bukkit:reload");
+        assert!(bukkit_reload.requires_approval);
+
+        // 7. Time query vs time set
+        let time_query = McpToolEngine::normalize_and_classify_command("time query daytime");
+        assert!(!time_query.requires_approval);
+
+        let time_set = McpToolEngine::normalize_and_classify_command("time set day");
+        assert!(time_set.requires_approval);
+
+        // 8. Quoted arguments
+        let quoted = McpToolEngine::normalize_and_classify_command("say \"Hello world!\"");
+        assert!(quoted.requires_approval);
+        assert_eq!(quoted.normalized_command, "say \"Hello world!\"");
+        assert_eq!(quoted.command_hash.len(), 64);
+    }
 
     #[test]
     fn test_classify_command_permissions() {
@@ -2683,8 +3375,15 @@ Java Version: 21.0.2
         assert_eq!(parsed["description"], "Exception ticking world");
         assert_eq!(parsed["minecraft_version"], "1.21.4");
         assert_eq!(parsed["java_version"], "21.0.2");
-        assert!(parsed["suspected_extensions"].as_array().unwrap().contains(&json!("WorldEdit")));
-        assert!(parsed["caused_by"].as_array().unwrap().contains(&json!("java.lang.IllegalStateException: World uninitialized")));
+        assert!(
+            parsed["suspected_extensions"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("WorldEdit"))
+        );
+        assert!(parsed["caused_by"].as_array().unwrap().contains(&json!(
+            "java.lang.IllegalStateException: World uninitialized"
+        )));
     }
     #[test]
     fn test_parse_log_performance_indicators() {

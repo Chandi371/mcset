@@ -1,11 +1,11 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use anyhow::{anyhow, Result};
+use crate::mcp_tools::McpToolEngine;
+use crate::models::{AiChatEvent, AiChatMessage, AiProviderConfig, McpToolCall};
+use anyhow::{Result, anyhow};
 use reqwest::Client;
 use serde_json::json;
-use crate::mcp_tools::McpToolEngine;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
-use crate::models::{AiChatEvent, AiChatMessage, AiProviderConfig, McpToolCall};
 
 pub struct AiAgent {
     mcp_engine: Arc<McpToolEngine>,
@@ -24,37 +24,59 @@ impl AiAgent {
     fn format_step_description(tool_name: &str, args: &serde_json::Value) -> String {
         match tool_name {
             "search_modpacks" => {
-                let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("modpacks");
-                let p = args.get("provider").and_then(|v| v.as_str()).unwrap_or("modrinth");
+                let q = args
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("modpacks");
+                let p = args
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("modrinth");
                 format!("Searching {} for '{}'", p, q)
             }
             "get_modpack_versions" => {
-                let p = args.get("project_id").and_then(|v| v.as_str()).unwrap_or("");
+                let p = args
+                    .get("project_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 format!("Fetching versions for modpack '{}'", p)
             }
             "install_modpack_server" => {
-                let n = args.get("name").and_then(|v| v.as_str()).unwrap_or("Modpack Server");
+                let n = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Modpack Server");
                 format!("Installing & deploying modpack server '{}'", n)
             }
             "create_server" => {
-                let n = args.get("name").and_then(|v| v.as_str()).unwrap_or("Server");
-                let t = args.get("server_type").and_then(|v| v.as_str()).unwrap_or("vanilla");
+                let n = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Server");
+                let t = args
+                    .get("server_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("vanilla");
                 format!("Creating {} server '{}'", t, n)
             }
             "download_java_runtime" => {
-                let m = args.get("major_version").and_then(|v| v.as_u64()).unwrap_or(21);
+                let m = args
+                    .get("major_version")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(21);
                 format!("Downloading portable OpenJDK Java {}", m)
             }
-            "auto_fix_server_java" => {
-                "Auto-fixing Java version incompatibility".to_string()
-            }
+            "auto_fix_server_java" => "Auto-fixing Java version incompatibility".to_string(),
             "start_server" => "Starting server process".to_string(),
             "stop_server" => "Stopping server process".to_string(),
             "restart_server" => "Restarting server".to_string(),
             "read_server_logs" => "Reading server console logs".to_string(),
             "inspect_crash_report" => "Inspecting crash report and stack trace".to_string(),
             "read_config" => {
-                let path = args.get("relative_path").and_then(|v| v.as_str()).unwrap_or("server.properties");
+                let path = args
+                    .get("relative_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("server.properties");
                 format!("Reading config file '{}'", path)
             }
             "propose_config_change" | "apply_config_change" | "set_server_property" => {
@@ -62,7 +84,10 @@ impl AiAgent {
             }
             "send_console_command" => {
                 let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                format!("Executing console command '/{}'", cmd.trim_start_matches('/'))
+                format!(
+                    "Executing console command '/{}'",
+                    cmd.trim_start_matches('/')
+                )
             }
             "list_servers" => "Listing configured servers".to_string(),
             "get_server_status" => "Checking server status and resource usage".to_string(),
@@ -82,22 +107,43 @@ impl AiAgent {
     fn format_tool_result_thought(tool_name: &str, desc: &str, success: bool) -> String {
         if success {
             match tool_name {
-                "search_modpacks" => "Found matching modpacks. Inspecting versions and server pack downloads...".to_string(),
-                "get_modpack_versions" => "Retrieved compatible versions. Checking server loader requirements...".to_string(),
-                "install_modpack_server" => "Modpack server installed and configured successfully.".to_string(),
+                "search_modpacks" => {
+                    "Found matching modpacks. Inspecting versions and server pack downloads..."
+                        .to_string()
+                }
+                "get_modpack_versions" => {
+                    "Retrieved compatible versions. Checking server loader requirements..."
+                        .to_string()
+                }
+                "install_modpack_server" => {
+                    "Modpack server installed and configured successfully.".to_string()
+                }
                 "create_server" => "Server instance created and registered into MCSet.".to_string(),
-                "list_servers" => "Loaded configured servers to verify port and directory isolation.".to_string(),
-                "download_java_runtime" => "OpenJDK runtime downloaded and installed into managed runtimes.".to_string(),
+                "list_servers" => {
+                    "Loaded configured servers to verify port and directory isolation.".to_string()
+                }
+                "download_java_runtime" => {
+                    "OpenJDK runtime downloaded and installed into managed runtimes.".to_string()
+                }
                 "auto_fix_server_java" => "Java version resolved and server restarted.".to_string(),
-                "read_server_logs" => "Parsed recent server logs. Analyzing warnings and stack traces...".to_string(),
-                "inspect_crash_report" => "Inspected crash report and identified error chain.".to_string(),
-                "start_server" => "Server started successfully. Monitoring startup status...".to_string(),
+                "read_server_logs" => {
+                    "Parsed recent server logs. Analyzing warnings and stack traces...".to_string()
+                }
+                "inspect_crash_report" => {
+                    "Inspected crash report and identified error chain.".to_string()
+                }
+                "start_server" => {
+                    "Server started successfully. Monitoring startup status...".to_string()
+                }
                 "stop_server" => "Server stopped safely.".to_string(),
                 "restart_server" => "Server restart initiated.".to_string(),
                 _ => format!("Completed: {}. Formulating next steps...", desc),
             }
         } else {
-            format!("Notice: {} reported an issue. Evaluating alternatives...", desc)
+            format!(
+                "Notice: {} reported an issue. Evaluating alternatives...",
+                desc
+            )
         }
     }
 
@@ -255,9 +301,18 @@ impl AiAgent {
             }
 
             let model_response = match config.provider.to_lowercase().as_str() {
-                "anthropic" => self.call_anthropic(&client, config, &conversation, &tools).await?,
-                "gemini" => self.call_gemini(&client, config, &conversation, &tools).await?,
-                _ => self.call_openai_compatible(&client, config, &conversation, &tools).await?,
+                "anthropic" => {
+                    self.call_anthropic(&client, config, &conversation, &tools)
+                        .await?
+                }
+                "gemini" => {
+                    self.call_gemini(&client, config, &conversation, &tools)
+                        .await?
+                }
+                _ => {
+                    self.call_openai_compatible(&client, config, &conversation, &tools)
+                        .await?
+                }
             };
 
             if self.cancel_flag.load(Ordering::SeqCst) {
@@ -296,7 +351,8 @@ impl AiAgent {
                             let mut out = conversation[start_index..].to_vec();
                             out.push(AiChatMessage {
                                 role: "assistant".to_string(),
-                                content: "Action stopped by user while executing tools.".to_string(),
+                                content: "Action stopped by user while executing tools."
+                                    .to_string(),
                                 tool_calls: None,
                                 tool_call_id: None,
                             });
@@ -308,7 +364,12 @@ impl AiAgent {
                             "ai-chat-event",
                             AiChatEvent {
                                 event_type: "thought".to_string(),
-                                content: Some(format!("Step {}/{}: Running {}", idx + 1, tool_calls.len(), desc)),
+                                content: Some(format!(
+                                    "Step {}/{}: Running {}",
+                                    idx + 1,
+                                    tool_calls.len(),
+                                    desc
+                                )),
                                 tool_name: Some(call.name.clone()),
                                 tool_call_id: Some(call.id.clone()),
                                 step_description: Some(desc.clone()),
@@ -351,7 +412,8 @@ impl AiAgent {
                             },
                         );
 
-                        let summary_thought = Self::format_tool_result_thought(&call.name, &desc, result.success);
+                        let summary_thought =
+                            Self::format_tool_result_thought(&call.name, &desc, result.success);
                         let _ = self.mcp_engine.app_handle.emit(
                             "ai-chat-event",
                             AiChatEvent {
@@ -404,7 +466,8 @@ impl AiAgent {
                 &self.mcp_engine.app_handle,
                 &model_response.content,
                 &self.cancel_flag,
-            ).await;
+            )
+            .await;
 
             let _ = self.mcp_engine.app_handle.emit(
                 "ai-chat-event",
@@ -442,9 +505,15 @@ impl AiAgent {
         });
 
         let summary_response = match config.provider.to_lowercase().as_str() {
-            "anthropic" => self.call_anthropic(&client, config, &conversation, &[]).await,
+            "anthropic" => {
+                self.call_anthropic(&client, config, &conversation, &[])
+                    .await
+            }
             "gemini" => self.call_gemini(&client, config, &conversation, &[]).await,
-            _ => self.call_openai_compatible(&client, config, &conversation, &[]).await,
+            _ => {
+                self.call_openai_compatible(&client, config, &conversation, &[])
+                    .await
+            }
         };
 
         match summary_response {
@@ -461,12 +530,16 @@ impl AiAgent {
             }
         }
 
-        let final_content = conversation.last().map(|m| m.content.clone()).unwrap_or_default();
+        let final_content = conversation
+            .last()
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
         Self::stream_text_to_ui(
             &self.mcp_engine.app_handle,
             &final_content,
             &self.cancel_flag,
-        ).await;
+        )
+        .await;
 
         let _ = self.mcp_engine.app_handle.emit(
             "ai-chat-event",
@@ -618,7 +691,8 @@ impl AiAgent {
             Err(e) => {
                 return Err(anyhow!(
                     "Failed to connect to AI Provider ({}). Details: {}. Check your network connection or API URL.",
-                    endpoint, e
+                    endpoint,
+                    e
                 ));
             }
         };
@@ -630,7 +704,8 @@ impl AiAgent {
                 return Err(anyhow!(
                     "Connection was closed or timed out while receiving AI response (HTTP {}): {}. \
                      Note: Free tier models on OpenRouter can be very slow or queued. Consider choosing a fast free model like 'google/gemini-2.0-flash-exp:free' or 'meta-llama/llama-3.3-70b-instruct:free'.",
-                    status, e
+                    status,
+                    e
                 ));
             }
         };
@@ -642,10 +717,15 @@ impl AiAgent {
         let res_json: serde_json::Value = match serde_json::from_str(&raw_text) {
             Ok(j) => j,
             Err(e) => {
-                let preview = if raw_text.len() > 300 { &raw_text[..300] } else { &raw_text };
+                let preview = if raw_text.len() > 300 {
+                    &raw_text[..300]
+                } else {
+                    &raw_text
+                };
                 return Err(anyhow!(
                     "AI Provider response was not valid JSON: {}. Response preview: {}",
-                    e, preview
+                    e,
+                    preview
                 ));
             }
         };
@@ -662,8 +742,15 @@ impl AiAgent {
         let choice = match res_json["choices"].as_array().and_then(|c| c.first()) {
             Some(c) => &c["message"],
             None => {
-                let preview = if raw_text.len() > 300 { &raw_text[..300] } else { &raw_text };
-                return Err(anyhow!("AI Provider returned empty choices array. Body: {}", preview));
+                let preview = if raw_text.len() > 300 {
+                    &raw_text[..300]
+                } else {
+                    &raw_text
+                };
+                return Err(anyhow!(
+                    "AI Provider returned empty choices array. Body: {}",
+                    preview
+                ));
             }
         };
 
@@ -692,11 +779,7 @@ impl AiAgent {
                     })
                 })
                 .collect();
-            if calls.is_empty() {
-                None
-            } else {
-                Some(calls)
-            }
+            if calls.is_empty() { None } else { Some(calls) }
         } else {
             None
         };
@@ -760,7 +843,11 @@ impl AiAgent {
         let status = resp.status();
         let raw_text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
-            return Err(anyhow!("Anthropic API error (HTTP {}): {}", status, raw_text));
+            return Err(anyhow!(
+                "Anthropic API error (HTTP {}): {}",
+                status,
+                raw_text
+            ));
         }
 
         let res_json: serde_json::Value = serde_json::from_str(&raw_text)
@@ -807,7 +894,11 @@ impl AiAgent {
 
         let mut contents: Vec<serde_json::Value> = Vec::new();
         for m in messages.iter().filter(|m| m.role != "system") {
-            let role = if m.role == "assistant" { "model" } else { "user" };
+            let role = if m.role == "assistant" {
+                "model"
+            } else {
+                "user"
+            };
             contents.push(json!({
                 "role": role,
                 "parts": [{ "text": m.content }]
@@ -880,7 +971,11 @@ impl AiAgent {
         }
 
         let final_text = text_parts.join("\n");
-        let calls_opt = if tool_calls.is_empty() { None } else { Some(tool_calls) };
+        let calls_opt = if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        };
 
         Ok(AiChatMessage {
             role: "assistant".to_string(),

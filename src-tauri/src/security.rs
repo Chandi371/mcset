@@ -1,5 +1,5 @@
+use anyhow::{Result, anyhow};
 use std::path::{Path, PathBuf};
-use anyhow::{anyhow, Result};
 
 pub struct SecurityPolicy;
 
@@ -26,9 +26,9 @@ impl SecurityPolicy {
 
         // If target doesn't exist yet, validate its nearest existing ancestor
         let canonical_target = if target_path.exists() {
-            let canon = target_path.canonicalize().map_err(|e| {
-                anyhow!("Failed to resolve target path {:?}: {}", target_path, e)
-            })?;
+            let canon = target_path
+                .canonicalize()
+                .map_err(|e| anyhow!("Failed to resolve target path {:?}: {}", target_path, e))?;
             Self::normalize_path(&canon)
         } else {
             let mut ancestors = target_path.ancestors();
@@ -51,7 +51,9 @@ impl SecurityPolicy {
                     Self::normalize_path(target_path)
                 }
                 None => {
-                    return Err(anyhow!("Cannot resolve valid parent directory for target path"));
+                    return Err(anyhow!(
+                        "Cannot resolve valid parent directory for target path"
+                    ));
                 }
             }
         };
@@ -91,10 +93,7 @@ impl SecurityPolicy {
                 || c == '!'
                 || c == ':')
             {
-                return Err(anyhow!(
-                    "Server name contains invalid character: '{}'.",
-                    c
-                ));
+                return Err(anyhow!("Server name contains invalid character: '{}'.", c));
             }
         }
         Ok(())
@@ -122,7 +121,10 @@ impl SecurityPolicy {
         }
         if max_ram_mb > 1048576 {
             // 1024 GB (1 TB) safety ceiling for massive servers
-            return Err(anyhow!("Maximum RAM ({} MB) exceeds safety limit of 1024 GB (1 TB)", max_ram_mb));
+            return Err(anyhow!(
+                "Maximum RAM ({} MB) exceeds safety limit of 1024 GB (1 TB)",
+                max_ram_mb
+            ));
         }
         Ok(())
     }
@@ -145,7 +147,10 @@ impl SecurityPolicy {
         }
         let uniform = trimmed.replace('\\', "/");
         if uniform.starts_with('/') || uniform.contains(':') {
-            return Err(anyhow!("Absolute or drive-prefixed paths are not permitted: {}", rel_path));
+            return Err(anyhow!(
+                "Absolute or drive-prefixed paths are not permitted: {}",
+                rel_path
+            ));
         }
 
         let mut buf = PathBuf::new();
@@ -155,7 +160,10 @@ impl SecurityPolicy {
                 continue;
             }
             if seg == ".." {
-                return Err(anyhow!("Path traversal token '..' detected in: {}", rel_path));
+                return Err(anyhow!(
+                    "Path traversal token '..' detected in: {}",
+                    rel_path
+                ));
             }
             buf.push(seg);
         }
@@ -168,18 +176,27 @@ impl SecurityPolicy {
 
     /// Resolves and validates a relative path inside a target base directory.
     /// Normalizes mixed slashes ('/' vs '\\') into a platform-native PathBuf and verifies boundary confinement.
-    pub fn validate_safe_relative_path(base_dir: &std::path::Path, rel_path: &str) -> Result<std::path::PathBuf> {
+    pub fn validate_safe_relative_path(
+        base_dir: &std::path::Path,
+        rel_path: &str,
+    ) -> Result<std::path::PathBuf> {
         let normalized = Self::normalize_relative_path(rel_path)?;
         let target = base_dir.join(normalized);
         // Ensure that the target starts with base_dir
         if !target.starts_with(base_dir) {
-            return Err(anyhow!("Path escapes designated server boundary: {}", rel_path));
+            return Err(anyhow!(
+                "Path escapes designated server boundary: {}",
+                rel_path
+            ));
         }
         Ok(target)
     }
 
     /// Resolves an incoming relative path within the server directory using path normalization and root boundary checks.
-    pub fn resolve_server_relative_path(server_dir: &std::path::Path, rel_path: &str) -> Result<std::path::PathBuf> {
+    pub fn resolve_server_relative_path(
+        server_dir: &std::path::Path,
+        rel_path: &str,
+    ) -> Result<std::path::PathBuf> {
         let safe_target = Self::validate_safe_relative_path(server_dir, rel_path)?;
         Self::validate_path_within_root(server_dir, &safe_target)
     }
@@ -200,9 +217,13 @@ impl SecurityPolicy {
     pub fn validate_download_url(url_str: &str) -> Result<()> {
         let parsed = url::Url::parse(url_str).map_err(|e| anyhow!("Invalid URL format: {}", e))?;
         if parsed.scheme() != "https" {
-            return Err(anyhow!("Security violation: only HTTPS downloads are allowed"));
+            return Err(anyhow!(
+                "Security violation: only HTTPS downloads are allowed"
+            ));
         }
-        let host = parsed.host_str().ok_or_else(|| anyhow!("URL missing host"))?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| anyhow!("URL missing host"))?;
 
         const ALLOWED_SUFFIXES: &[&str] = &[
             "mojang.com",
@@ -224,9 +245,9 @@ impl SecurityPolicy {
             "githubusercontent.com",
         ];
 
-        let is_allowed = ALLOWED_SUFFIXES.iter().any(|suffix| {
-            host == *suffix || host.ends_with(&format!(".{}", suffix))
-        });
+        let is_allowed = ALLOWED_SUFFIXES
+            .iter()
+            .any(|suffix| host == *suffix || host.ends_with(&format!(".{}", suffix)));
 
         if !is_allowed {
             return Err(anyhow!(
@@ -247,7 +268,9 @@ mod tests {
     fn test_server_name_validation() {
         assert!(SecurityPolicy::validate_server_name("My Survival Server").is_ok());
         assert!(SecurityPolicy::validate_server_name("paper-1.21.4_prod").is_ok());
-        assert!(SecurityPolicy::validate_server_name("Cobblemon Official Modpack [Fabric]").is_ok());
+        assert!(
+            SecurityPolicy::validate_server_name("Cobblemon Official Modpack [Fabric]").is_ok()
+        );
         assert!(SecurityPolicy::validate_server_name("All the Mods 9 (ATM9)").is_ok());
         assert!(SecurityPolicy::validate_server_name("").is_err());
         assert!(SecurityPolicy::validate_server_name("server/../hack").is_err());
@@ -268,15 +291,24 @@ mod tests {
     fn test_safe_relative_path() {
         let base = std::path::PathBuf::from("C:\\server_root");
         assert!(SecurityPolicy::validate_safe_relative_path(&base, "mods/jei.jar").is_ok());
-        assert!(SecurityPolicy::validate_safe_relative_path(&base, "plugins\\ViaVersion.jar").is_ok());
+        assert!(
+            SecurityPolicy::validate_safe_relative_path(&base, "plugins\\ViaVersion.jar").is_ok()
+        );
         assert!(SecurityPolicy::validate_safe_relative_path(&base, "config/sub/test.toml").is_ok());
-        assert!(SecurityPolicy::validate_safe_relative_path(&base, ".\\config\\nested/test.yml").is_ok());
+        assert!(
+            SecurityPolicy::validate_safe_relative_path(&base, ".\\config\\nested/test.yml")
+                .is_ok()
+        );
         assert!(SecurityPolicy::validate_safe_relative_path(&base, "../outside.txt").is_err());
         assert!(SecurityPolicy::validate_safe_relative_path(&base, "mods/../../hack.exe").is_err());
         assert!(SecurityPolicy::validate_safe_relative_path(&base, "/etc/passwd").is_err());
-        assert!(SecurityPolicy::validate_safe_relative_path(&base, "C:\\Windows\\System32").is_err());
-        
-        let normalized = SecurityPolicy::normalize_relative_path_string(r"plugins\ViaVersion\config.yml").unwrap();
+        assert!(
+            SecurityPolicy::validate_safe_relative_path(&base, "C:\\Windows\\System32").is_err()
+        );
+
+        let normalized =
+            SecurityPolicy::normalize_relative_path_string(r"plugins\ViaVersion\config.yml")
+                .unwrap();
         assert_eq!(normalized, "plugins/ViaVersion/config.yml");
     }
 
@@ -288,16 +320,42 @@ mod tests {
 
     #[test]
     fn test_download_url_validation() {
-        assert!(SecurityPolicy::validate_download_url("https://piston-data.mojang.com/v1/objects/123/server.jar").is_ok());
-        assert!(SecurityPolicy::validate_download_url("https://fill-data.papermc.io/v1/objects/123/paper.jar").is_ok());
+        assert!(
+            SecurityPolicy::validate_download_url(
+                "https://piston-data.mojang.com/v1/objects/123/server.jar"
+            )
+            .is_ok()
+        );
+        assert!(
+            SecurityPolicy::validate_download_url(
+                "https://fill-data.papermc.io/v1/objects/123/paper.jar"
+            )
+            .is_ok()
+        );
         assert!(SecurityPolicy::validate_download_url("https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.2/fabric-installer-1.1.2.jar").is_ok());
         assert!(SecurityPolicy::validate_download_url("https://maven.neoforged.net/releases/net/neoforged/neoforge/21.4.111-beta/neoforge.jar").is_ok());
-        assert!(SecurityPolicy::validate_download_url("https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1/forge.jar").is_ok());
-        assert!(SecurityPolicy::validate_download_url("https://maven.quiltmc.org/repository/release/quilt.jar").is_ok());
-        
+        assert!(
+            SecurityPolicy::validate_download_url(
+                "https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1/forge.jar"
+            )
+            .is_ok()
+        );
+        assert!(
+            SecurityPolicy::validate_download_url(
+                "https://maven.quiltmc.org/repository/release/quilt.jar"
+            )
+            .is_ok()
+        );
+
         // Disallowed
-        assert!(SecurityPolicy::validate_download_url("http://piston-data.mojang.com/insecure.jar").is_err());
-        assert!(SecurityPolicy::validate_download_url("https://malicious-mirror.com/server.jar").is_err());
+        assert!(
+            SecurityPolicy::validate_download_url("http://piston-data.mojang.com/insecure.jar")
+                .is_err()
+        );
+        assert!(
+            SecurityPolicy::validate_download_url("https://malicious-mirror.com/server.jar")
+                .is_err()
+        );
         assert!(SecurityPolicy::validate_download_url("not-a-url").is_err());
     }
 }

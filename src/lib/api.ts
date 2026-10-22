@@ -379,11 +379,13 @@ export const api = {
     title?: string;
     filterName?: string;
     extensions?: string[];
+    directory?: boolean;
   }): Promise<string | null> => {
     return invoke("pick_local_file", {
       title: options?.title || null,
       filterName: options?.filterName || null,
       extensions: options?.extensions || null,
+      directory: options?.directory || false,
     });
   },
 
@@ -481,6 +483,10 @@ export const api = {
 
   createServerFolder: async (serverId: string, relativePath: string): Promise<boolean> => {
     return invoke("create_server_folder", { serverId, relativePath });
+  },
+
+  confirmAppShutdown: async (): Promise<boolean> => {
+    return invoke("confirm_app_shutdown");
   },
 };
 

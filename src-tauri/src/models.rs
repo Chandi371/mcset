@@ -8,6 +8,7 @@ pub enum ServerType {
     Spigot,
     Fabric,
     Forge,
+    #[serde(alias = "neoforge", alias = "neo-forge")]
     NeoForge,
     Arclight,
     Vanilla,
@@ -287,6 +288,8 @@ pub struct PendingCommandApproval {
     pub server_id: String,
     pub server_name: String,
     pub command: String,
+    #[serde(default)]
+    pub command_hash: String,
     pub explanation: String,
     pub impact: String,
     pub created_at: i64,
@@ -450,8 +453,6 @@ pub struct CurseForgeFileRef {
     pub required: bool,
 }
 
-
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhitelistPlayer {
     pub uuid: Option<String>,
@@ -530,4 +531,37 @@ pub struct FileEntry {
     pub size_bytes: u64,
     pub modified_ms: u64,
     pub extension: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_server_type_deserialization_variants() {
+        // Test that both "neoforge" and "neo_forge" deserialize to ServerType::NeoForge
+        let nf1: ServerType = serde_json::from_str(r#""neoforge""#).expect("Should parse 'neoforge'");
+        assert_eq!(nf1, ServerType::NeoForge);
+
+        let nf2: ServerType = serde_json::from_str(r#""neo_forge""#).expect("Should parse 'neo_forge'");
+        assert_eq!(nf2, ServerType::NeoForge);
+
+        let forge: ServerType = serde_json::from_str(r#""forge""#).expect("Should parse 'forge'");
+        assert_eq!(forge, ServerType::Forge);
+
+        let fabric: ServerType = serde_json::from_str(r#""fabric""#).expect("Should parse 'fabric'");
+        assert_eq!(fabric, ServerType::Fabric);
+
+        let paper: ServerType = serde_json::from_str(r#""paper""#).expect("Should parse 'paper'");
+        assert_eq!(paper, ServerType::Paper);
+
+        let purpur: ServerType = serde_json::from_str(r#""purpur""#).expect("Should parse 'purpur'");
+        assert_eq!(purpur, ServerType::Purpur);
+
+        let vanilla: ServerType = serde_json::from_str(r#""vanilla""#).expect("Should parse 'vanilla'");
+        assert_eq!(vanilla, ServerType::Vanilla);
+
+        let quilt: ServerType = serde_json::from_str(r#""quilt""#).expect("Should parse 'quilt'");
+        assert_eq!(quilt, ServerType::Quilt);
+    }
 }

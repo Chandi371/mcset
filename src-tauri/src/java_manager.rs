@@ -1,10 +1,10 @@
+use anyhow::{Result, anyhow};
+use futures_util::StreamExt;
+use reqwest::Client;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use anyhow::{anyhow, Result};
-use futures_util::StreamExt;
-use reqwest::Client;
 use tauri::{AppHandle, Emitter};
 
 use crate::models::{JavaRuntime, JdkDownloadProgress};
@@ -206,7 +206,8 @@ impl JavaManager {
     fn parse_version(output: &str) -> Option<(u32, String)> {
         for line in output.lines() {
             let lower = line.to_lowercase();
-            if lower.contains("version \"") || lower.contains("openjdk ") || lower.contains("java ") {
+            if lower.contains("version \"") || lower.contains("openjdk ") || lower.contains("java ")
+            {
                 if let Some(start_q) = line.find('"') {
                     if let Some(end_q) = line[start_q + 1..].find('"') {
                         let ver_str = &line[start_q + 1..start_q + 1 + end_q];
@@ -216,7 +217,9 @@ impl JavaManager {
                 }
 
                 for token in line.split_whitespace() {
-                    if token.chars().next().map_or(false, |c| c.is_ascii_digit()) && token.contains('.') {
+                    if token.chars().next().map_or(false, |c| c.is_ascii_digit())
+                        && token.contains('.')
+                    {
                         let cleaned = token.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
                         let major = Self::extract_major(cleaned);
                         return Some((major, cleaned.to_string()));
@@ -348,11 +351,18 @@ impl JavaManager {
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()?;
 
-        let resp = client.get(&url).send().await
+        let resp = client
+            .get(&url)
+            .send()
+            .await
             .map_err(|e| anyhow!("Failed to initiate JDK download from {}: {}", url, e))?;
 
         if !resp.status().is_success() {
-            return Err(anyhow!("Adoptium returned HTTP {} for JDK {}", resp.status(), major_version));
+            return Err(anyhow!(
+                "Adoptium returned HTTP {} for JDK {}",
+                resp.status(),
+                major_version
+            ));
         }
 
         let total_bytes = resp.content_length().unwrap_or(0);
@@ -372,7 +382,12 @@ impl JavaManager {
                 45.0
             };
 
-            emit("Downloading OpenJDK archive...", pct, downloaded, total_bytes);
+            emit(
+                "Downloading OpenJDK archive...",
+                pct,
+                downloaded,
+                total_bytes,
+            );
         }
         drop(file);
 
@@ -427,7 +442,8 @@ impl JavaManager {
                 continue;
             }
 
-            let target_path = SecurityPolicy::validate_safe_relative_path(&target_dir, stripped_name)?;
+            let target_path =
+                SecurityPolicy::validate_safe_relative_path(&target_dir, stripped_name)?;
             if file.is_dir() {
                 std::fs::create_dir_all(&target_path)?;
             } else {
@@ -441,15 +457,27 @@ impl JavaManager {
 
         let _ = std::fs::remove_file(&tmp_zip);
 
-        emit("Verifying Java installation...", 96.0, downloaded, total_bytes);
+        emit(
+            "Verifying Java installation...",
+            96.0,
+            downloaded,
+            total_bytes,
+        );
 
         let java_bin = Self::resolve_java_binary(&target_dir);
         if !java_bin.exists() {
-            return Err(anyhow!("Failed to locate java binary in extracted JDK at {:?}", target_dir));
+            return Err(anyhow!(
+                "Failed to locate java binary in extracted JDK at {:?}",
+                target_dir
+            ));
         }
 
-        let runtime = Self::inspect_java_binary(&java_bin)
-            .ok_or_else(|| anyhow!("Installed Java binary at {:?} could not be validated", java_bin))?;
+        let runtime = Self::inspect_java_binary(&java_bin).ok_or_else(|| {
+            anyhow!(
+                "Installed Java binary at {:?} could not be validated",
+                java_bin
+            )
+        })?;
 
         emit("Java ready!", 100.0, downloaded, total_bytes);
 
@@ -471,12 +499,19 @@ impl JavaManager {
         }
 
         // 2. Try to find a compatible runtime within acceptable range (min_major ..= rec_major + 1)
-        if let Some(compatible) = runtimes.iter().find(|r| r.major_version >= min_major && r.major_version <= rec_major + 1) {
+        if let Some(compatible) = runtimes
+            .iter()
+            .find(|r| r.major_version >= min_major && r.major_version <= rec_major + 1)
+        {
             return Ok(compatible.path.clone());
         }
 
         // 3. No compatible runtime found! Auto-install the recommended JDK
-        log::info!("No compatible Java runtime found for Minecraft {}. Auto-installing Java {}...", mc_version, rec_major);
+        log::info!(
+            "No compatible Java runtime found for Minecraft {}. Auto-installing Java {}...",
+            mc_version,
+            rec_major
+        );
         let runtime = Self::download_and_install_jdk(data_dir, rec_major, app).await?;
         Ok(runtime.path)
     }

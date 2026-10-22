@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Server } from "lucide-react";
+import { Server, AlertTriangle } from "lucide-react";
 import { Sidebar } from "./components/Sidebar";
 import { ServerList } from "./components/ServerList";
 import { ConsoleView } from "./components/ConsoleView";
@@ -27,6 +27,15 @@ export const App: React.FC = () => {
   const [isStartingOrStopping, setIsStartingOrStopping] = useState(false);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [isAiActive, setIsAiActive] = useState(false);
+
+  interface ShutdownRequestData {
+    running_servers: string[];
+    running_server_ids: string[];
+    running_tunnels: string[];
+    count: number;
+  }
+  const [shutdownData, setShutdownData] = useState<ShutdownRequestData | null>(null);
+  const [isShuttingDown, setIsShuttingDown] = useState(false);
 
   const handleSetActiveServer = (server: ServerProfile | null) => {
     activeServerRef.current = server;
@@ -95,6 +104,14 @@ export const App: React.FC = () => {
       unlisten = fn;
     });
 
+    // Listener for window close with running servers
+    let unlistenShutdown: (() => void) | undefined;
+    listen<ShutdownRequestData>("app-close-requested", (e) => {
+      setShutdownData(e.payload);
+    }).then((fn) => {
+      unlistenShutdown = fn;
+    });
+
     // Also poll every 3 seconds for guaranteed live sync across all tabs
     const interval = setInterval(() => {
       loadServers();
@@ -102,6 +119,7 @@ export const App: React.FC = () => {
 
     return () => {
       if (unlisten) unlisten();
+      if (unlistenShutdown) unlistenShutdown();
       clearInterval(interval);
     };
   }, []);
@@ -332,6 +350,73 @@ export const App: React.FC = () => {
             setCurrentTab("console");
           }}
         />
+      )}
+      {/* Active Server / Tunnel Shutdown Confirmation Modal */}
+      {shutdownData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-card border border-border rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-foreground text-base">Active Servers Running</h3>
+                <p className="text-xs text-muted-foreground">Confirm Application Exit</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-foreground/90 leading-relaxed">
+              You have <strong className="text-amber-400">{shutdownData.count}</strong> active Minecraft server(s) or tunnel(s) currently running:
+            </p>
+
+            <div className="bg-background/80 border border-border/60 rounded-xl p-3 max-h-36 overflow-y-auto space-y-1.5 text-xs">
+              {shutdownData.running_servers.map((name, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-foreground font-mono">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span className="truncate">{name}</span>
+                </div>
+              ))}
+              {shutdownData.running_tunnels.map((tId, idx) => (
+                <div key={`t-${idx}`} className="flex items-center gap-2 text-muted-foreground font-mono">
+                  <span className="w-2 h-2 rounded-full bg-sky-500 shrink-0" />
+                  <span className="truncate">Portal Tunnel: {tId}</span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs text-rose-400/90 bg-rose-500/10 border border-rose-500/20 rounded-lg p-2.5">
+              ⚠️ Closing MCSet now will stop active server processes and disconnect online players.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShutdownData(null)}
+                disabled={isShuttingDown}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-secondary hover:bg-secondary/80 text-foreground transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setIsShuttingDown(true);
+                    await api.confirmAppShutdown();
+                  } catch (e) {
+                    console.error("Failed to shutdown servers", e);
+                    setIsShuttingDown(false);
+                    setShutdownData(null);
+                  }
+                }}
+                disabled={isShuttingDown}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition-colors flex items-center gap-2 shadow-sm disabled:opacity-50"
+              >
+                {isShuttingDown ? "Stopping Servers & Exiting..." : "Stop Servers & Exit"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
