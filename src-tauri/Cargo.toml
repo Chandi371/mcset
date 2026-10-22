@@ -2,7 +2,7 @@
 name = "mcset"
 version = "0.1.0"
 description = "Cross-Platform Minecraft Server Management Platform"
-authors = ["Antigravity"]
+authors = ["chandi371"]
 edition = "2024"
 rust-version = "1.90"
 

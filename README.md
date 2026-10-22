@@ -4,7 +4,7 @@
 
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-blue?logo=tauri)](https://tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
-[![Rust](https://img.shields.io/badge/Rust-1.85+-orange?logo=rust)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.90+-orange?logo=rust)](https://www.rust-lang.org/)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-green.svg)](LICENSE)
 
 ---
@@ -14,7 +14,7 @@
 - **🚀 Instant Server Creation & Setup**
   - Support for **Paper**, **Purpur**, **Fabric**, **Forge**, **NeoForge**, **Spigot**, **Vanilla**, and **Bedrock**.
   - One-click installation of Modrinth `.mrpack` modpacks with dependency resolution.
-  - Automatic EULA acceptance and initial server configuration.
+  - EULA acceptance prompt and initial server configuration.
 
 - **☕ Smart Java Runtime Management**
   - Automatically detects system Java installations.
@@ -60,7 +60,7 @@
 
 ### Prerequisites
 - [Node.js](https://nodejs.org/) (v18 or newer)
-- [Rust](https://www.rust-lang.org/tools/install) (1.78+)
+- [Rust](https://www.rust-lang.org/tools/install) (1.90 or newer)
 - C++ Build Tools (Visual Studio 2022 C++ build tools on Windows)
 - Tauri CLI (`npm install -g @tauri-apps/cli`)
 
