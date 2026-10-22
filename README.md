@@ -21,7 +21,7 @@
   - Automatically downloads and provisions isolated Java runtimes (Java 8, 11, 17, 21) from Adoptium / Eclipse Temurin based on Minecraft version requirements.
 
 - **🌐 Zero-Port-Forwarding Multiplayer**
-  - Built-in **playit.gg** tunnel integration (MCSet Portal).
+  - Built-in tunnel integration (Portal).
   - Share your server with friends anywhere instantly without opening router ports or exposing your home IP address.
 
 - **🤖 Built-in Intelligent Server AI Assistant**
