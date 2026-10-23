@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https://minotar.net data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https://minotar.net https://cdn.modrinth.com https://*.modrinth.com https://media.forgecdn.net https://*.forgecdn.net https://crafatar.com https://mc-heads.net data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; media-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';"
     }
   },
   "bundle": {

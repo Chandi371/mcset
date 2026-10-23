@@ -560,11 +560,21 @@ export const ExtensionManagerView: React.FC<ExtensionManagerViewProps> = ({ serv
                   >
                     <div className="flex items-start gap-3.5 flex-1 min-w-0">
                       {proj.icon_url ? (
-                        <img
-                          src={proj.icon_url}
-                          alt={proj.title}
-                          className="w-12 h-12 rounded-lg object-cover bg-secondary border border-border shrink-0"
-                        />
+                        <>
+                          <img
+                            src={proj.icon_url}
+                            alt={proj.title}
+                            className="w-12 h-12 rounded-lg object-cover bg-secondary border border-border shrink-0"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLElement).style.display = 'none';
+                              const fallback = (e.currentTarget as HTMLElement).parentElement?.querySelector('.fallback-ext-icon');
+                              if (fallback) (fallback as HTMLElement).classList.remove('hidden');
+                            }}
+                          />
+                          <div className="fallback-ext-icon hidden w-12 h-12 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                            <Package className="w-6 h-6" />
+                          </div>
+                        </>
                       ) : (
                         <div className="w-12 h-12 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
                           <Package className="w-6 h-6" />

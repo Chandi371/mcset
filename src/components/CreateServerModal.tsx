@@ -942,11 +942,21 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
                       >
                         <div className="flex items-start gap-3">
                           {pack.icon_url ? (
-                            <img
-                              src={pack.icon_url}
-                              alt={pack.title}
-                              className="w-12 h-12 rounded-lg object-cover shrink-0 bg-background border border-border group-hover:scale-105 transition-transform"
-                            />
+                            <>
+                              <img
+                                src={pack.icon_url}
+                                alt={pack.title}
+                                className="w-12 h-12 rounded-lg object-cover shrink-0 bg-background border border-border group-hover:scale-105 transition-transform"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLElement).style.display = 'none';
+                                  const fallback = (e.currentTarget as HTMLElement).parentElement?.querySelector('.fallback-pack-icon');
+                                  if (fallback) (fallback as HTMLElement).classList.remove('hidden');
+                                }}
+                              />
+                              <div className="fallback-pack-icon hidden w-12 h-12 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
+                                <Package className="w-6 h-6" />
+                              </div>
+                            </>
                           ) : (
                             <div className="w-12 h-12 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
                               <Package className="w-6 h-6" />
@@ -1056,6 +1066,9 @@ export const CreateServerModal: React.FC<CreateServerModalProps> = ({
                         src={selectedProject.icon_url}
                         alt={selectedProject.title}
                         className="w-10 h-10 rounded-lg object-cover bg-background border border-border"
+                        onError={(e) => {
+                          (e.currentTarget as HTMLElement).style.display = 'none';
+                        }}
                       />
                     )}
                     <div>
