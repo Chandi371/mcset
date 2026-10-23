@@ -103,6 +103,8 @@ scratch/
 mrpack-install.exe
 mcset.exe
 mcset-source.zip
+mcset-*.zip
+*.zip
 *.msi
 *.exe
 
