@@ -2,42 +2,46 @@
 
 > **A modern, lightweight, high-performance Minecraft server manager with native AI assistant integration, built with Tauri 2, Rust, and React.**
 
+[![Latest Release](https://img.shields.io/github/v/release/Chandi371/mcset?color=emerald&logo=github)](https://github.com/Chandi371/mcset/releases/latest)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-blue?logo=tauri)](https://tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.90+-orange?logo=rust)](https://www.rust-lang.org/)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)](https://github.com/Chandi371/mcset/releases)
 
 ---
 
 ## ✨ Features
 
-- **🚀 Instant Server Creation & Setup**
-  - Support for **Paper**, **Purpur**, **Fabric**, **Forge**, **NeoForge**, **Spigot**, **Vanilla**, and **Bedrock**.
+- **🚀 1-Click Server Creation & Setup**
+  - Instant deployment for **Paper**, **Purpur**, **Fabric**, **Forge**, **NeoForge**, **Spigot**, **Vanilla**, and **Bedrock**.
+  - Automatic download and launch of server runtimes and installers without manual JAR or launch script shuffling.
+  - Native file & directory selection for importing custom servers or uploading ZIP archives.
   - One-click installation of Modrinth `.mrpack` modpacks with dependency resolution.
-  - EULA acceptance prompt and initial server configuration.
+  - Transparent EULA acceptance prompt and initial server configuration.
 
 - **☕ Smart Java Runtime Management**
-  - Automatically detects system Java installations.
-  - Automatically downloads and provisions isolated Java runtimes (Java 8, 11, 17, 21) from Adoptium / Eclipse Temurin based on Minecraft version requirements.
+  - Automatically scans and detects installed system Java runtimes.
+  - Dynamically provisions isolated Adoptium / Eclipse Temurin JDKs (Java 8, 11, 16, 17, 21) matching your Minecraft version requirements.
 
 - **🌐 Zero-Port-Forwarding Multiplayer**
-  - Built-in tunnel integration (Portal).
+  - Built-in tunnel integration (Portal) with verified platform release downloads and SHA-256 integrity verification.
   - Share your server with friends anywhere instantly without opening router ports or exposing your home IP address.
 
-- **🤖 Built-in Intelligent Server AI Assistant**
-  - Integrated with Model Context Protocol (MCP) server tools.
-  - **Live Performance Diagnostics**: Ask *"Why is my server lagging?"* to diagnose TPS drops, MSPT tick timing, chunk thrashing, and memory bottlenecks.
-  - **Crash Log Analysis**: AI parses stack traces and suggests exact mod or config fixes.
-  - Direct execution of safe server commands, config modifications, and troubleshooting.
+- **🤖 Built-in Intelligent Server AI Assistant (MCP)**
+  - Integrated Model Context Protocol (MCP) server tools.
+  - **Cryptographic Action Approval**: Destructive actions (server deletion, backup restoration, file edits, console commands) require user consent with single-use cryptographic authorization tokens.
+  - **Live Diagnostics**: Ask *"Why is my server lagging?"* to analyze TPS drops, MSPT tick timing, chunk thrashing, and memory bottlenecks.
+  - **Crash Log Analysis**: AI analyzes crash logs, parses stack traces, and suggests exact mod or configuration fixes.
 
 - **👥 Complete Player & Permissions Management**
   - Visual management of Whitelist, Operators (levels 1-4), Banned Players, and Banned IPs.
-  - Automatic `usercache.json` UUID synchronization with strict deduplication.
-  - Quick player search and real-time player actions.
+  - Real-time `usercache.json` UUID synchronization with strict deduplication.
+  - Player search, online status indicators, and head avatars with local fallbacks.
 
 - **⚙️ Visual Config Editor**
-  - Intuitive visual sliders, toggles, and dropdowns for `server.properties` and software-specific configs.
-  - Dual-mode editor: Switch between visual GUI controls and raw code editor with syntax preservation and comment retention.
+  - Dual-mode editor: Intuitive visual sliders, toggles, and dropdowns alongside a full syntax-highlighted editor for `server.properties` and software-specific configs.
+  - Full comment preservation and non-destructive diff updates.
 
 - **🧩 Mod & Plugin Store**
   - Direct Modrinth marketplace search for mods and plugins.
@@ -46,13 +50,16 @@
 
 ---
 
-## 📥 Installation & Download
+## 📥 Downloads (Latest Release v0.1.0)
 
-### Windows
-1. Download the latest installer or portable executable from [Releases](https://github.com/Chandi371/mcset/releases):
-   - **Installer**: `mcset_0.1.0_x64-setup.exe` (or `.msi`)
-   - **Standalone Executable**: `mcset.exe`
-2. Run the application. MCSet automatically prepares the environment.
+| Package | Type | Description | Download |
+| :--- | :--- | :--- | :--- |
+| **Windows Setup** | `.exe` | Windows NSIS installer (Recommended) | [Download `mcset_0.1.0_x64-setup.exe`](https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_x64-setup.exe) |
+| **Windows MSI** | `.msi` | Windows Installer package | [Download `mcset_0.1.0_x64_en-US.msi`](https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_x64_en-US.msi) |
+| **Portable Executable** | `.exe` | Standalone portable executable | [Download `mcset.exe`](https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset.exe) |
+| **Source Archive** | `.zip` | Complete repository source bundle | [Download `mcset-v0.1.0-source.zip`](https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset-v0.1.0-source.zip) |
+
+All official release artifacts are hosted directly on the [GitHub Releases Page](https://github.com/Chandi371/mcset/releases).
 
 ---
 
@@ -66,38 +73,37 @@
 
 ### Quick Start
 ```bash
-# Clone repository
+# 1. Clone repository
 git clone https://github.com/Chandi371/mcset.git
 cd mcset
 
-# Install frontend dependencies
+# 2. Install frontend dependencies
 npm install
 
-# Run frontend unit tests
-npm test
+# 3. Run test suites
+npm test                                         # Frontend unit tests (Vitest)
+cargo test --manifest-path src-tauri/Cargo.toml   # Rust backend unit tests
 
-# Run Rust backend unit tests
-cargo test --manifest-path src-tauri/Cargo.toml
-
-# Start development mode
+# 4. Start development mode
 npm run tauri dev
 
-# Build release executable and installers
+# 5. Build production executable and installers
 npm run tauri build
 ```
 
-The compiled binaries will be output to:
+Compiled release binaries are created at:
 - `src-tauri/target/release/mcset.exe`
 - `src-tauri/target/release/bundle/nsis/mcset_0.1.0_x64-setup.exe`
 - `src-tauri/target/release/bundle/msi/mcset_0.1.0_x64_en-US.msi`
 
 ---
 
-## 🔒 Security & Privacy
+## 🔒 Security Architecture
 
-- All server files and worlds are stored locally on your machine.
-- Process isolation and strict path traversal protection prevent malicious filesystem manipulation.
-- AI features use your own configured API key (Gemini / OpenRouter) stored securely in local storage.
+- **Strict Content Security Policy (CSP)**: WebView2 is secured with an explicit CSP restricting origins, preventing unauthorized script execution, and whitelisting only authorized asset CDNs (Modrinth, ForgeCDN, Minotar).
+- **Hardened MCP Authorization**: Destructive operations executed through MCP tools require explicit user consent via single-use SHA-256 tokens.
+- **Process Sandbox & Safe Paths**: Strict path sanitization prevents directory traversal attacks outside the designated server directory.
+- **Explicit Consent**: Transparent EULA confirmation ensures users explicitly review and accept terms without silent background agreements.
 
 ---
 
