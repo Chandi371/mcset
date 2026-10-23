@@ -1152,6 +1152,46 @@ pub async fn approve_console_command(
         approval.command
     );
 
+    if approval.command.starts_with("mcp:") {
+        let parts: Vec<&str> = approval.command.splitn(4, ':').collect();
+        if parts.len() < 4 {
+            return Err("Malformed approved MCP command payload".to_string());
+        }
+        let tool_name = parts[1];
+        let raw_args = parts[3];
+        let args_val: serde_json::Value = serde_json::from_str(raw_args)
+            .map_err(|e| format!("Failed to parse approved tool arguments: {}", e))?;
+
+        log::info!(
+            "[Audit] User approved and executing sensitive MCP tool: approval_id={}, tool='{}', server_id={}",
+            approval_id,
+            tool_name,
+            approval.server_id
+        );
+
+        let output = state
+            .mcp_engine
+            .execute_approved_destructive_tool(tool_name, &args_val)
+            .await
+            .map_err(|e| format!("Failed to execute approved MCP tool '{}': {}", tool_name, e))?;
+
+        let result = serde_json::json!({
+            "status": "approved_and_executed",
+            "approval_id": approval_id,
+            "server_id": approval.server_id,
+            "server_name": approval.server_name,
+            "command": approval.command,
+            "output": output,
+            "success": true,
+            "message": format!("Tool '{}' approved and executed successfully.", tool_name)
+        });
+
+        use tauri::Emitter;
+        let _ = app.emit("console-command-approved", &result);
+
+        return Ok(result);
+    }
+
     state
         .lifecycle
         .send_command(&approval.server_id, &approval.command)

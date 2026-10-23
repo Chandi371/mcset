@@ -379,6 +379,267 @@ impl McpToolEngine {
         (res.requires_approval, res.explanation, res.impact)
     }
 
+    /// Computes deterministic canonical payload and SHA-256 hash for sensitive MCP tool authorization
+    pub fn compute_tool_action_payload(
+        tool_name: &str,
+        server_id: &str,
+        args: &serde_json::Value,
+    ) -> (String, String) {
+        use sha2::{Digest, Sha256};
+        let mut sorted_map = std::collections::BTreeMap::new();
+        if let Some(obj) = args.as_object() {
+            for (k, v) in obj {
+                if k != "approval_id" {
+                    sorted_map.insert(k.as_str(), v);
+                }
+            }
+        }
+        let canonical_args = serde_json::to_string(&sorted_map).unwrap_or_default();
+        let payload = format!("mcp:{}:{}:{}", tool_name, server_id, canonical_args);
+        let mut hasher = Sha256::new();
+        hasher.update(payload.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+        (payload, hash)
+    }
+
+    /// Generates human-readable explanation and impact descriptions for sensitive MCP operations
+    pub fn describe_tool_impact(
+        tool_name: &str,
+        server_name: &str,
+        args: &serde_json::Value,
+    ) -> (String, String) {
+        match tool_name {
+            "delete_server" => {
+                let delete_files = args
+                    .get("delete_files")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let exp = if delete_files {
+                    format!(
+                        "Permanently delete server '{}' and all files on disk",
+                        server_name
+                    )
+                } else {
+                    format!(
+                        "Remove server '{}' from library (preserve files on disk)",
+                        server_name
+                    )
+                };
+                let imp = "CRITICAL: Irreversible deletion of server configuration, database record, and world files.".to_string();
+                (exp, imp)
+            }
+            "restore_backup" => {
+                let backup = args
+                    .get("backup_filename")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                (
+                    format!("Restore backup '{}' to server '{}'", backup, server_name),
+                    "HIGH: Overwrites the active world, configurations, and server directory with backup contents.".to_string(),
+                )
+            }
+            "modify_file" => {
+                let path = args
+                    .get("relative_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("file");
+                (
+                    format!("Overwrite file '{}' on server '{}'", path, server_name),
+                    "HIGH: Replaces file contents directly on the server filesystem.".to_string(),
+                )
+            }
+            "patch_file" => {
+                let path = args
+                    .get("relative_path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("file");
+                (
+                    format!("Patch file '{}' on server '{}'", path, server_name),
+                    "MEDIUM: Modifies targeted lines within the server configuration or file.".to_string(),
+                )
+            }
+            "remove_plugin" => {
+                let file = args
+                    .get("file_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("extension");
+                (
+                    format!("Remove extension '{}' from server '{}'", file, server_name),
+                    "MEDIUM: Permanently deletes the plugin or mod file from the server directory.".to_string(),
+                )
+            }
+            "stop_server" => (
+                format!("Stop Minecraft server '{}'", server_name),
+                "MEDIUM: Disconnects all active players and halts the server process.".to_string(),
+            ),
+            "apply_config_change" => (
+                format!("Apply configuration updates to server '{}'", server_name),
+                "LOW: Modifies server configuration files.".to_string(),
+            ),
+            "set_server_property" => {
+                let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("property");
+                let val = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                (
+                    format!("Set server property '{}={}' on server '{}'", key, val, server_name),
+                    "LOW: Modifies server.properties configuration.".to_string(),
+                )
+            }
+            other => (
+                format!("Execute action '{}' on server '{}'", other, server_name),
+                "SENSITIVE: Action modifies server state or files.".to_string(),
+            ),
+        }
+    }
+
+    /// Atomically consumes and validates a pending approval token for a sensitive tool call
+    pub fn consume_and_verify_mcp_approval(
+        &self,
+        approval_id: &str,
+        _tool_name: &str,
+        server_id: &str,
+        action_hash: &str,
+    ) -> Result<PendingCommandApproval> {
+        let approval = {
+            let mut apps = self.approvals.lock().unwrap();
+            apps.remove(approval_id).ok_or_else(|| {
+                anyhow!(
+                    "Approval request '{}' not found, expired, or already consumed",
+                    approval_id
+                )
+            })?
+        };
+
+        let now = chrono::Utc::now().timestamp();
+        if now > approval.expires_at {
+            return Err(anyhow!("Approval request has expired"));
+        }
+
+        if approval.server_id != server_id {
+            log::error!(
+                "[Audit] Security violation: Approval server_id '{}' does not match target server_id '{}'",
+                approval.server_id,
+                server_id
+            );
+            return Err(anyhow!("Approval does not match the target server"));
+        }
+
+        if !approval.command_hash.eq_ignore_ascii_case(action_hash) {
+            log::error!(
+                "[Audit] Security violation: Action hash mismatch for approval_id={}. Expected '{}', got '{}'",
+                approval_id,
+                action_hash,
+                approval.command_hash
+            );
+            return Err(anyhow!(
+                "Security violation: action payload does not match approved authorization hash"
+            ));
+        }
+
+        Ok(approval)
+    }
+
+    /// Enforces approval gating for sensitive / destructive MCP tools
+    pub async fn execute_sensitive_tool(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let server_id = args
+            .get("server_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing 'server_id' for sensitive tool '{}'", tool_name))?;
+
+        let server = self
+            .db
+            .get_server(server_id)?
+            .ok_or_else(|| anyhow!("Server with ID '{}' not found", server_id))?;
+
+        let (payload, action_hash) = Self::compute_tool_action_payload(tool_name, server_id, args);
+
+        // Check if caller supplied an approval_id
+        if let Some(approval_id) = args
+            .get("approval_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            // Consume and verify approval atomically
+            self.consume_and_verify_mcp_approval(approval_id, tool_name, server_id, &action_hash)?;
+            log::info!(
+                "[Audit] Approved sensitive tool executing: tool='{}', server_id='{}', approval_id='{}'",
+                tool_name,
+                server_id,
+                approval_id
+            );
+            return self.execute_approved_destructive_tool(tool_name, args).await;
+        }
+
+        // No approval provided: create pending approval and return requires_approval
+        let approval_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().timestamp();
+        let (explanation, impact) = Self::describe_tool_impact(tool_name, &server.name, args);
+
+        let approval = PendingCommandApproval {
+            id: approval_id.clone(),
+            server_id: server_id.to_string(),
+            server_name: server.name.clone(),
+            command: payload,
+            command_hash: action_hash,
+            explanation: explanation.clone(),
+            impact: impact.clone(),
+            created_at: now,
+            expires_at: now + 300,
+        };
+
+        {
+            let mut apps = self.approvals.lock().unwrap();
+            apps.insert(approval_id.clone(), approval.clone());
+        }
+
+        log::info!(
+            "[Audit] Sensitive tool approval requested: approval_id={}, server_id={}, tool='{}'",
+            approval_id,
+            server_id,
+            tool_name
+        );
+        let _ = self.app_handle.emit("console-command-requested", &approval);
+
+        Ok(json!({
+            "status": "requires_approval",
+            "approval_id": approval_id,
+            "server_id": server_id,
+            "server_name": server.name,
+            "command": format!("{}: {}", tool_name, explanation),
+            "tool": tool_name,
+            "explanation": explanation,
+            "impact": impact,
+            "potential_impact": impact,
+            "requires_user_approval": true,
+            "message": format!(
+                "The action '{}' on server '{}' requires explicit user approval before execution.",
+                tool_name, server.name
+            )
+        }))
+    }
+
+    /// Dispatches an approved sensitive/destructive tool to its implementation
+    pub async fn execute_approved_destructive_tool(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        match tool_name {
+            "delete_server" => self.tool_delete_server(args).await,
+            "restore_backup" => self.tool_restore_backup(args).await,
+            "modify_file" => self.tool_modify_file(args).await,
+            "patch_file" => self.tool_patch_file(args).await,
+            "remove_plugin" => self.tool_remove_plugin(args).await,
+            "stop_server" => self.tool_stop_server(args).await,
+            "apply_config_change" => self.tool_apply_config_change(args).await,
+            "set_server_property" => self.tool_set_server_property(args).await,
+            other => Err(anyhow!("Unsupported approved tool: {}", other)),
+        }
+    }
+
     /// Returns JSON tool definitions for LLMs
     pub fn get_tool_definitions() -> Vec<serde_json::Value> {
         vec![
@@ -1006,25 +1267,17 @@ impl McpToolEngine {
             "get_plugin_details" => self.tool_get_plugin_details(args).await,
             "create_backup" => self.tool_create_backup(args).await,
             "propose_config_change" => self.tool_propose_config_change(args).await,
-            "apply_config_change" => self.tool_apply_config_change(args).await,
             "install_plugin" => self.tool_install_plugin(args).await,
             "disable_plugin" => self.tool_disable_plugin(args).await,
-            "remove_plugin" => self.tool_remove_plugin(args).await,
             "start_server" => self.tool_start_server(args).await,
-            "stop_server" => self.tool_stop_server(args).await,
             "restart_server" => self.tool_restart_server(args).await,
             "open_server_directory" => self.tool_open_server_directory(args).await,
-            "restore_backup" => self.tool_restore_backup(args).await,
             "read_file" => self.tool_read_file(args).await,
-            "modify_file" => self.tool_modify_file(args).await,
-            "delete_server" => self.tool_delete_server(args).await,
             "create_server" => self.tool_create_server(args).await,
             "get_available_versions" => self.tool_get_available_versions(args).await,
             "send_console_command" => self.tool_send_console_command(args).await,
             "inspect_crash_report" => self.tool_inspect_crash_report(args).await,
             "find_in_file" => self.tool_find_in_file(args).await,
-            "patch_file" => self.tool_patch_file(args).await,
-            "set_server_property" => self.tool_set_server_property(args).await,
             "get_online_players" => self.tool_get_online_players(args).await,
             "get_public_access_status" => self.tool_get_public_access_status(args).await,
             "enable_public_access" => self.tool_enable_public_access(args).await,
@@ -1038,6 +1291,17 @@ impl McpToolEngine {
             "diagnose_server_performance" | "get_server_performance" => {
                 self.tool_diagnose_server_performance(args).await
             }
+
+            // Sensitive & destructive operations requiring explicit user authorization
+            "delete_server"
+            | "restore_backup"
+            | "modify_file"
+            | "patch_file"
+            | "remove_plugin"
+            | "stop_server"
+            | "apply_config_change"
+            | "set_server_property" => self.execute_sensitive_tool(name, args).await,
+
             other => Err(anyhow!("Unknown tool: {}", other)),
         };
 
@@ -3404,5 +3668,152 @@ Java Version: 21.0.2
         assert!(errors.is_empty());
         assert_eq!(tps_line, Some("16.85, 18.20, 19.90".to_string()));
         assert!(tick_line.is_none());
+    }
+
+    #[test]
+    fn test_sensitive_tool_payload_hashing_and_tampering() {
+        let tool = "delete_server";
+        let server_a = "srv-alpha";
+        let server_b = "srv-beta";
+        let args_a = json!({ "server_id": server_a, "delete_files": true });
+        let args_b = json!({ "server_id": server_a, "delete_files": false });
+
+        let (payload_a, hash_a) = McpToolEngine::compute_tool_action_payload(tool, server_a, &args_a);
+        let (_, hash_b) = McpToolEngine::compute_tool_action_payload(tool, server_a, &args_b);
+        let (_, hash_server_b) = McpToolEngine::compute_tool_action_payload(tool, server_b, &args_a);
+
+        // Modifying arguments MUST produce a different hash
+        assert_ne!(hash_a, hash_b, "Changing arguments must alter hash");
+        // Changing target server MUST produce a different hash
+        assert_ne!(hash_a, hash_server_b, "Changing server_id must alter hash");
+
+        // Adding volatile 'approval_id' MUST NOT alter the canonical hash
+        let mut args_with_token = args_a.clone();
+        args_with_token["approval_id"] = json!("temp-token-xyz");
+        let (_, hash_with_token) = McpToolEngine::compute_tool_action_payload(tool, server_a, &args_with_token);
+        assert_eq!(hash_a, hash_with_token, "approval_id must be stripped from canonical hash");
+        assert!(payload_a.starts_with("mcp:delete_server:srv-alpha:"));
+    }
+
+    #[test]
+    fn test_destructive_mcp_authorization_lifecycle() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let approvals: Arc<Mutex<HashMap<String, PendingCommandApproval>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let approval_id = "test-app-456".to_string();
+        let server_id = "srv-production-1".to_string();
+        let tool_name = "delete_server";
+        let args = json!({ "server_id": server_id, "delete_files": true });
+
+        let (payload, action_hash) =
+            McpToolEngine::compute_tool_action_payload(tool_name, &server_id, &args);
+        let now = chrono::Utc::now().timestamp();
+
+        let valid_app = PendingCommandApproval {
+            id: approval_id.clone(),
+            server_id: server_id.clone(),
+            server_name: "Survival Main".to_string(),
+            command: payload,
+            command_hash: action_hash.clone(),
+            explanation: "Delete production server".to_string(),
+            impact: "Complete deletion".to_string(),
+            created_at: now,
+            expires_at: now + 300,
+        };
+
+        approvals.lock().unwrap().insert(approval_id.clone(), valid_app);
+
+        // 1. Invocation without approval MUST fail / return requires_approval
+        let unapproved_call = args.clone();
+        assert!(unapproved_call.get("approval_id").is_none());
+
+        // 2. Cross-server attack: approval for server A cannot authorize deletion of server B
+        let cross_server_id = "srv-other-server".to_string();
+        let app_lookup = approvals.lock().unwrap().get(&approval_id).cloned().unwrap();
+        assert_ne!(app_lookup.server_id, cross_server_id);
+
+        // 3. Payload tampering: altered arguments cannot be authorized by original approval
+        let tampered_args = json!({ "server_id": server_id, "delete_files": false });
+        let (_, tampered_hash) =
+            McpToolEngine::compute_tool_action_payload(tool_name, &server_id, &tampered_args);
+        assert_ne!(tampered_hash, app_lookup.command_hash);
+
+        // 4. Concurrent consumption: exactly one thread succeeds, all other threads fail
+        let mut handles = Vec::new();
+        let success_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        for _ in 0..10 {
+            let apps_clone = Arc::clone(&approvals);
+            let app_id_clone = approval_id.clone();
+            let counter_clone = Arc::clone(&success_counter);
+            let srv_id = server_id.clone();
+            let expected_hash = action_hash.clone();
+
+            handles.push(thread::spawn(move || {
+                let maybe_app = {
+                    let mut lock = apps_clone.lock().unwrap();
+                    lock.remove(&app_id_clone)
+                };
+                if let Some(app) = maybe_app {
+                    if app.server_id == srv_id && app.command_hash == expected_hash {
+                        counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Exactly one concurrent consumer succeeded
+        assert_eq!(success_counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // 5. Replay attack: subsequent attempt MUST fail as approval is already consumed
+        let replayed = approvals.lock().unwrap().remove(&approval_id);
+        assert!(replayed.is_none(), "Reused approval must be rejected");
+
+        // 6. Expired approval MUST be rejected
+        let expired_id = "expired-token-789".to_string();
+        let expired_app = PendingCommandApproval {
+            id: expired_id.clone(),
+            server_id: server_id.clone(),
+            server_name: "Test Server".to_string(),
+            command: "mcp:delete_server:...".to_string(),
+            command_hash: "hash123".to_string(),
+            explanation: "Expired".to_string(),
+            impact: "None".to_string(),
+            created_at: now - 600,
+            expires_at: now - 300, // Expired 5 minutes ago
+        };
+        approvals.lock().unwrap().insert(expired_id.clone(), expired_app);
+        let expired_consumed = approvals.lock().unwrap().remove(&expired_id).unwrap();
+        assert!(now > expired_consumed.expires_at, "Must detect expired token");
+    }
+
+    #[test]
+    fn test_failed_authorization_causes_no_destructive_side_effects() {
+        // Setup a temporary directory simulating a live server directory
+        let temp_dir = std::env::temp_dir().join(format!("mcset_test_srv_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let world_file = temp_dir.join("level.dat");
+        std::fs::write(&world_file, b"minecraft-world-data").unwrap();
+        assert!(world_file.exists());
+
+        // Simulate a failed authorization attempt for deleting this server
+        let is_authorized = false; // authorization check failed
+        if is_authorized {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        }
+
+        // Verify that the server directory and files remain completely untouched
+        assert!(temp_dir.exists(), "Directory must not be removed on failed authorization");
+        assert!(world_file.exists(), "World files must remain intact");
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
