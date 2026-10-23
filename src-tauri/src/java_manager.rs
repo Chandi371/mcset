@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Emitter};
@@ -154,7 +154,12 @@ impl JavaManager {
             return bin_dir;
         }
 
-        // Check if extracted into a nested directory (e.g. jdk-21.0.12+1/bin/java.exe)
+        // Check if extracted into a nested directory (e.g. jdk-21.0.12+1/bin/java or macOS Contents/Home/bin/java)
+        let mac_direct = dir_or_bin.join("Contents").join("Home").join("bin").join(bin_name);
+        if mac_direct.exists() {
+            return mac_direct;
+        }
+
         if let Ok(entries) = std::fs::read_dir(dir_or_bin) {
             for e in entries.flatten() {
                 let sub = e.path();
@@ -162,6 +167,10 @@ impl JavaManager {
                     let nested = sub.join("bin").join(bin_name);
                     if nested.exists() {
                         return nested;
+                    }
+                    let mac_nested = sub.join("Contents").join("Home").join("bin").join(bin_name);
+                    if mac_nested.exists() {
+                        return mac_nested;
                     }
                 }
             }
@@ -366,8 +375,8 @@ impl JavaManager {
         }
 
         let total_bytes = resp.content_length().unwrap_or(0);
-        let tmp_zip = java_dir.join(format!(".tmp_jdk_{}.zip", major_version));
-        let mut file = File::create(&tmp_zip)?;
+        let tmp_archive = java_dir.join(format!(".tmp_jdk_{}.archive", major_version));
+        let mut file = File::create(&tmp_archive)?;
         let mut downloaded: u64 = 0;
 
         let mut stream = resp.bytes_stream();
@@ -399,63 +408,103 @@ impl JavaManager {
         }
         std::fs::create_dir_all(&target_dir)?;
 
-        let zip_file = File::open(&tmp_zip)?;
-        let mut archive = zip::ZipArchive::new(zip_file)
-            .map_err(|e| anyhow!("Invalid JDK zip archive: {}", e))?;
+        // Inspect header to detect tar.gz vs zip format
+        let mut magic = [0u8; 2];
+        {
+            let mut f = File::open(&tmp_archive)?;
+            let _ = f.read_exact(&mut magic);
+        }
 
-        // Detect common root prefix (e.g. "jdk-21.0.12+1/")
-        let mut common_root: Option<String> = None;
-        if archive.len() > 0 {
-            let first_name = archive.by_index(0).ok().map(|e| e.name().to_string());
-            if let Some(first_name) = first_name {
-                if let Some(root) = first_name.split('/').next() {
-                    if !root.is_empty() && first_name.contains('/') {
-                        let prefix = format!("{}/", root);
-                        let mut all_match = true;
-                        for i in 0..archive.len() {
-                            if let Ok(e) = archive.by_index(i) {
-                                let n = e.name();
-                                if !n.starts_with(&prefix) && n != root {
-                                    all_match = false;
-                                    break;
+        if magic == [0x1F, 0x8B] {
+            // Gzip compressed tarball (.tar.gz) used on Linux and macOS
+            let tar_gz = File::open(&tmp_archive)?;
+            let tar_stream = flate2::read::GzDecoder::new(tar_gz);
+            let mut archive = tar::Archive::new(tar_stream);
+
+            for entry_res in archive.entries()? {
+                let mut entry = entry_res?;
+                let path = entry.path()?.to_path_buf();
+
+                // Strip root folder prefix (e.g. "jdk-21.0.13+9/")
+                let mut components: Vec<_> = path.components().collect();
+                if components.len() > 1 {
+                    components.remove(0);
+                    let relative_path: PathBuf = components.into_iter().collect();
+                    let target_path = SecurityPolicy::validate_safe_relative_path(
+                        &target_dir,
+                        &relative_path.to_string_lossy(),
+                    )?;
+
+                    if entry.header().entry_type().is_dir() {
+                        std::fs::create_dir_all(&target_path)?;
+                    } else {
+                        if let Some(p) = target_path.parent() {
+                            std::fs::create_dir_all(p)?;
+                        }
+                        entry.unpack(&target_path)?;
+                    }
+                }
+            }
+        } else {
+            // Zip archive format used on Windows
+            let zip_file = File::open(&tmp_archive)?;
+            let mut archive = zip::ZipArchive::new(zip_file)
+                .map_err(|e| anyhow!("Invalid JDK zip archive: {}", e))?;
+
+            // Detect common root prefix (e.g. "jdk-21.0.12+1/")
+            let mut common_root: Option<String> = None;
+            if archive.len() > 0 {
+                let first_name = archive.by_index(0).ok().map(|e| e.name().to_string());
+                if let Some(first_name) = first_name {
+                    if let Some(root) = first_name.split('/').next() {
+                        if !root.is_empty() && first_name.contains('/') {
+                            let prefix = format!("{}/", root);
+                            let mut all_match = true;
+                            for i in 0..archive.len() {
+                                if let Ok(e) = archive.by_index(i) {
+                                    let n = e.name();
+                                    if !n.starts_with(&prefix) && n != root {
+                                        all_match = false;
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        if all_match {
-                            common_root = Some(prefix);
+                            if all_match {
+                                common_root = Some(prefix);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i)?;
-            let name = file.name().to_string();
-            let stripped_name = if let Some(ref root) = common_root {
-                name.strip_prefix(root).unwrap_or(&name)
-            } else {
-                &name
-            };
+            for i in 0..archive.len() {
+                let mut file = archive.by_index(i)?;
+                let name = file.name().to_string();
+                let stripped_name = if let Some(ref root) = common_root {
+                    name.strip_prefix(root).unwrap_or(&name)
+                } else {
+                    &name
+                };
 
-            if stripped_name.is_empty() {
-                continue;
-            }
-
-            let target_path =
-                SecurityPolicy::validate_safe_relative_path(&target_dir, stripped_name)?;
-            if file.is_dir() {
-                std::fs::create_dir_all(&target_path)?;
-            } else {
-                if let Some(p) = target_path.parent() {
-                    std::fs::create_dir_all(p)?;
+                if stripped_name.is_empty() {
+                    continue;
                 }
-                let mut out = File::create(&target_path)?;
-                std::io::copy(&mut file, &mut out)?;
+
+                let target_path =
+                    SecurityPolicy::validate_safe_relative_path(&target_dir, stripped_name)?;
+                if file.is_dir() {
+                    std::fs::create_dir_all(&target_path)?;
+                } else {
+                    if let Some(p) = target_path.parent() {
+                        std::fs::create_dir_all(p)?;
+                    }
+                    let mut out = File::create(&target_path)?;
+                    std::io::copy(&mut file, &mut out)?;
+                }
             }
         }
 
-        let _ = std::fs::remove_file(&tmp_zip);
+        let _ = std::fs::remove_file(&tmp_archive);
 
         emit(
             "Verifying Java installation...",
@@ -470,6 +519,16 @@ impl JavaManager {
                 "Failed to locate java binary in extracted JDK at {:?}",
                 target_dir
             ));
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&java_bin) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&java_bin, perms);
+            }
         }
 
         let runtime = Self::inspect_java_binary(&java_bin).ok_or_else(|| {

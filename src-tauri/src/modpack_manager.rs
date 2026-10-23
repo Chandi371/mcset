@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
 use reqwest::Client;
 use sha1::Sha1;
-use sha2::{Digest, Sha512};
+use sha2::{Digest, Sha256, Sha512};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -650,18 +650,63 @@ impl ModpackManager {
 
     /// Locates the mrpack-install binary, checking standard locations or downloading release if missing
     pub async fn ensure_mrpack_install_binary(&self) -> Result<PathBuf> {
+        #[cfg(target_os = "windows")]
+        let (asset_name, exec_name, expected_hash) = (
+            "mrpack-install-windows.exe",
+            "mrpack-install.exe",
+            "b65cdf585659d328ae4ede36078c49ed7f819264f970d1350885f00cbf45c88b",
+        );
+
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        let (asset_name, exec_name, expected_hash) = (
+            "mrpack-install-linux",
+            "mrpack-install",
+            "01eb5c05423a7a94a7f844bde946c1963e296ecd9757c770923aeaf933f06bc1",
+        );
+
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        let (asset_name, exec_name, expected_hash) = (
+            "mrpack-install-linux-arm64",
+            "mrpack-install",
+            "64a214ca3332f435c829fd66d5a50a37a0abbae788cfbf955197b3f0d74a45cd",
+        );
+
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        let (asset_name, exec_name, expected_hash) = (
+            "mrpack-install-darwin",
+            "mrpack-install",
+            "f49612274e0e680e25988913238c9e23b407077859375bf89260d360f239f26c",
+        );
+
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        let (asset_name, exec_name, expected_hash) = (
+            "mrpack-install-darwin-arm64",
+            "mrpack-install",
+            "a226d432a6d1bbae52fe47fb0296ee82f608a12899cce5cc7996b84b0d3368e9",
+        );
+
+        let bin_dir = self.data_dir.join("bin");
+        let target_exe = bin_dir.join(exec_name);
+
         let candidates = [
-            self.data_dir.join("bin").join("mrpack-install.exe"),
-            PathBuf::from("mrpack-install.exe"),
-            PathBuf::from("C:\\Users\\hanis\\AppData\\Roaming\\mcset\\bin\\mrpack-install.exe"),
+            target_exe.clone(),
+            PathBuf::from(exec_name),
         ];
 
         for candidate in &candidates {
             if candidate.is_file() {
-                let target_bin = self.data_dir.join("bin").join("mrpack-install.exe");
-                if candidate != &target_bin && !target_bin.is_file() {
-                    let _ = std::fs::create_dir_all(self.data_dir.join("bin"));
-                    let _ = std::fs::copy(candidate, &target_bin);
+                if candidate != &target_exe && !target_exe.is_file() {
+                    let _ = std::fs::create_dir_all(&bin_dir);
+                    let _ = std::fs::copy(candidate, &target_exe);
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(meta) = std::fs::metadata(candidate) {
+                        let mut perms = meta.permissions();
+                        perms.set_mode(0o755);
+                        let _ = std::fs::set_permissions(candidate, perms);
+                    }
                 }
                 return Ok(candidate.clone());
             }
@@ -669,25 +714,34 @@ impl ModpackManager {
 
         if let Ok(curr) = std::env::current_exe() {
             if let Some(parent) = curr.parent() {
-                let p = parent.join("mrpack-install.exe");
+                let p = parent.join(exec_name);
                 if p.is_file() {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(meta) = std::fs::metadata(&p) {
+                            let mut perms = meta.permissions();
+                            perms.set_mode(0o755);
+                            let _ = std::fs::set_permissions(&p, perms);
+                        }
+                    }
                     return Ok(p);
                 }
             }
         }
 
-        // If not found locally, download official release from GitHub
-        let bin_dir = self.data_dir.join("bin");
+        // If not found locally, download official release from GitHub with SHA-256 verification
         std::fs::create_dir_all(&bin_dir)?;
-        let target_exe = bin_dir.join("mrpack-install.exe");
-
-        let download_url = "https://github.com/nothub/mrpack-install/releases/download/v0.16.10/mrpack-install-windows.exe";
+        let download_url = format!(
+            "https://github.com/nothub/mrpack-install/releases/download/v0.16.10/{}",
+            asset_name
+        );
         let resp = self
             .client
-            .get(download_url)
+            .get(&download_url)
             .send()
             .await
-            .map_err(|e| anyhow!("Failed to download mrpack-install: {}", e))?;
+            .map_err(|e| anyhow!("Failed to download mrpack-install from {}: {}", download_url, e))?;
         if !resp.status().is_success() {
             return Err(anyhow!(
                 "mrpack-install download failed with HTTP {}",
@@ -695,7 +749,33 @@ impl ModpackManager {
             ));
         }
         let bytes = resp.bytes().await?;
-        std::fs::write(&target_exe, &bytes)?;
+
+        // Verify SHA-256 integrity
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let computed = format!("{:x}", hasher.finalize());
+        if !computed.eq_ignore_ascii_case(expected_hash) {
+            return Err(anyhow!(
+                "SHA-256 verification failed for mrpack-install binary: expected {}, got {}",
+                expected_hash,
+                computed
+            ));
+        }
+
+        let tmp_file = bin_dir.join(format!("{}.tmp", exec_name));
+        std::fs::write(&tmp_file, &bytes)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(&tmp_file) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&tmp_file, perms);
+            }
+        }
+
+        std::fs::rename(&tmp_file, &target_exe)?;
         Ok(target_exe)
     }
 
@@ -757,7 +837,8 @@ impl ModpackManager {
     pub fn parse_downloaded_file(line: &str) -> Option<String> {
         if line.starts_with("Downloaded:") {
             let path_str = line["Downloaded:".len()..].trim();
-            let file_name = Path::new(path_str)
+            let normalized = path_str.replace('\\', "/");
+            let file_name = Path::new(&normalized)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| path_str.to_string());
@@ -770,7 +851,8 @@ impl ModpackManager {
     pub fn parse_server_jar(line: &str) -> Option<String> {
         if line.starts_with("Server jar downloaded to:") {
             let path_str = line["Server jar downloaded to:".len()..].trim();
-            let file_name = Path::new(path_str)
+            let normalized = path_str.replace('\\', "/");
+            let file_name = Path::new(&normalized)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| path_str.to_string());
@@ -2441,15 +2523,31 @@ mod tests {
         let count_line = "Downloading 77 dependencies...";
         assert_eq!(ModpackManager::parse_dependency_count(count_line), Some(77));
 
-        let file_line = "Downloaded: C:\\Users\\user\\server\\mods\\krypton-0.2.8.jar";
+        // Test Windows path parsing
+        let win_file_line = "Downloaded: C:\\Users\\user\\server\\mods\\krypton-0.2.8.jar";
         assert_eq!(
-            ModpackManager::parse_downloaded_file(file_line),
+            ModpackManager::parse_downloaded_file(win_file_line),
             Some("krypton-0.2.8.jar".to_string())
         );
 
-        let jar_line = "Server jar downloaded to: C:\\server\\fabric-server-mc.1.21.1-loader.0.19.5-launcher.1.1.2.jar";
+        // Test POSIX/Linux path parsing
+        let unix_file_line = "Downloaded: /home/user/server/mods/krypton-0.2.8.jar";
         assert_eq!(
-            ModpackManager::parse_server_jar(jar_line),
+            ModpackManager::parse_downloaded_file(unix_file_line),
+            Some("krypton-0.2.8.jar".to_string())
+        );
+
+        // Test Windows jar path parsing
+        let win_jar_line = "Server jar downloaded to: C:\\server\\fabric-server-mc.1.21.1-loader.0.19.5-launcher.1.1.2.jar";
+        assert_eq!(
+            ModpackManager::parse_server_jar(win_jar_line),
+            Some("fabric-server-mc.1.21.1-loader.0.19.5-launcher.1.1.2.jar".to_string())
+        );
+
+        // Test POSIX/Linux jar path parsing
+        let unix_jar_line = "Server jar downloaded to: /opt/server/fabric-server-mc.1.21.1-loader.0.19.5-launcher.1.1.2.jar";
+        assert_eq!(
+            ModpackManager::parse_server_jar(unix_jar_line),
             Some("fabric-server-mc.1.21.1-loader.0.19.5-launcher.1.1.2.jar".to_string())
         );
     }
