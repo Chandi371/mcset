@@ -51,15 +51,6 @@
 
 ---
 
-## 📸 Screenshots
-
-| Server Console & Zero-Port Tunnel | Plugins Manager (Modrinth) |
-| :---: | :---: |
-| ![Console & Tunnel](docs/screenshots/console.png) | ![Plugins Manager](docs/screenshots/plugins.png) |
-| **Player & Access Management** | **Backup & Recovery Snapshots** |
-| ![Players & Whitelist](docs/screenshots/players.png) | ![Backups](docs/screenshots/backups.png) |
-
----
 
 ## 📥 Downloads (Latest Release v0.1.0)
 
