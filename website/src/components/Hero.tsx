@@ -141,22 +141,45 @@ export const Hero: React.FC = () => {
 
             {/* Dropdown Menu */}
             {dropdownOpen && (
-              <div className="absolute top-full left-0 right-0 sm:right-auto sm:w-80 mt-2 glass-panel bg-slate-900/95 border border-slate-700 rounded-xl shadow-2xl py-2 z-50 text-left backdrop-blur-xl">
-                <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-800">
-                  Select Your Platform (v0.1.0)
+              <>
+                {/* Backdrop to close dropdown on click outside */}
+                <div 
+                  className="fixed inset-0 z-40 bg-black/20" 
+                  onClick={() => setDropdownOpen(false)} 
+                />
+                
+                <div className="absolute top-full left-0 right-0 sm:right-auto sm:w-84 mt-2 glass-panel bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl py-2 z-50 text-left backdrop-blur-xl max-h-[380px] overflow-y-auto">
+                  <div className="px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-800 flex items-center justify-between">
+                    <span>Select Platform (v0.1.0)</span>
+                    <span className="text-[10px] text-emerald-400 font-mono">Scroll for more ↓</span>
+                  </div>
+                  {allDownloads.map((item, idx) => (
+                    <a
+                      key={idx}
+                      href={item.url}
+                      onClick={() => setDropdownOpen(false)}
+                      className="block px-3.5 py-2.5 hover:bg-slate-800/80 transition-colors text-slate-200 border-b border-slate-800/40 last:border-b-0"
+                    >
+                      <div className="text-sm font-medium text-emerald-400 flex items-center justify-between">
+                        <span>{item.label}</span>
+                        <Download className="w-3.5 h-3.5 text-slate-400" />
+                      </div>
+                      <div className="text-xs text-slate-400 mt-0.5">{item.desc}</div>
+                    </a>
+                  ))}
+                  <div className="p-2 border-t border-slate-800 bg-slate-950/60">
+                    <button
+                      onClick={() => {
+                        setDropdownOpen(false);
+                        document.getElementById('download')?.scrollIntoView({ behavior: 'smooth' });
+                      }}
+                      className="w-full text-center text-[11px] text-emerald-400 hover:text-emerald-300 font-medium py-1"
+                    >
+                      View all installers & checksums ↓
+                    </button>
+                  </div>
                 </div>
-                {allDownloads.map((item, idx) => (
-                  <a
-                    key={idx}
-                    href={item.url}
-                    onClick={() => setDropdownOpen(false)}
-                    className="block px-3.5 py-2.5 hover:bg-slate-800 transition-colors text-slate-200"
-                  >
-                    <div className="text-sm font-medium text-emerald-400">{item.label}</div>
-                    <div className="text-xs text-slate-400">{item.desc}</div>
-                  </a>
-                ))}
-              </div>
+              </>
             )}
           </div>
 
