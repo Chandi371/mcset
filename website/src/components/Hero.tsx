@@ -49,38 +49,56 @@ export const Hero: React.FC = () => {
     }
   }, []);
 
-  const allDownloads = [
-    {
-      label: 'Windows Setup (.exe)',
-      desc: 'Recommended for Windows 10/11 x64',
-      url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_x64-setup.exe',
-    },
-    {
-      label: 'Windows MSI (.msi)',
-      desc: 'Standard Windows Installer package',
-      url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_x64_en-US.msi',
-    },
-    {
-      label: 'Windows Portable (.exe)',
-      desc: 'Zero-install standalone binary',
-      url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset.exe',
-    },
-    {
-      label: 'macOS Apple Silicon (.dmg)',
-      desc: 'For M1 / M2 / M3 / M4 Macs',
-      url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_aarch64.dmg',
-    },
-    {
-      label: 'Linux AppImage (.AppImage)',
-      desc: 'Runs on all modern Linux distributions',
-      url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_amd64.AppImage',
-    },
-    {
-      label: 'Linux Debian (.deb)',
-      desc: 'Ubuntu, Debian, Linux Mint',
-      url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_amd64.deb',
-    },
-  ];
+  const platformDownloads: Record<'windows' | 'mac' | 'linux', { label: string; desc: string; url: string }[]> = {
+    windows: [
+      {
+        label: 'Windows Setup (.exe)',
+        desc: 'Recommended installer with shortcuts & auto-updater',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_x64-setup.exe',
+      },
+      {
+        label: 'Windows MSI (.msi)',
+        desc: 'Standard Windows Installer package',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_x64_en-US.msi',
+      },
+      {
+        label: 'Windows Portable (.exe)',
+        desc: 'Zero-install standalone executable',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset.exe',
+      },
+    ],
+    mac: [
+      {
+        label: 'macOS Apple Silicon (.dmg)',
+        desc: 'For M1 / M2 / M3 / M4 Macs (Recommended)',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_aarch64.dmg',
+      },
+      {
+        label: 'macOS App Bundle (.app.tar.gz)',
+        desc: 'Standalone compressed application bundle',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset.app.tar.gz',
+      },
+    ],
+    linux: [
+      {
+        label: 'Universal AppImage (.AppImage)',
+        desc: 'Runs on all modern Linux distributions (Recommended)',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_amd64.AppImage',
+      },
+      {
+        label: 'Debian / Ubuntu (.deb)',
+        desc: 'For Ubuntu, Debian, Linux Mint',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset_0.1.0_amd64.deb',
+      },
+      {
+        label: 'Fedora / RHEL (.rpm)',
+        desc: 'For Fedora, RedHat, openSUSE',
+        url: 'https://github.com/Chandi371/mcset/releases/download/v0.1.0/mcset-0.1.0-1.x86_64.rpm',
+      },
+    ],
+  };
+
+  const currentOptions = platformDownloads[platform.os] || platformDownloads.windows;
 
   return (
     <section className="relative pt-12 pb-20 md:pt-20 md:pb-32 overflow-hidden">
@@ -148,12 +166,11 @@ export const Hero: React.FC = () => {
                   onClick={() => setDropdownOpen(false)} 
                 />
                 
-                <div className="absolute top-full left-0 right-0 sm:right-auto sm:w-84 mt-2 glass-panel bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl py-2 z-50 text-left backdrop-blur-xl max-h-[380px] overflow-y-auto">
-                  <div className="px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-800 flex items-center justify-between">
-                    <span>Select Platform (v0.1.0)</span>
-                    <span className="text-[10px] text-emerald-400 font-mono">Scroll for more ↓</span>
+                <div className="absolute top-full left-0 right-0 sm:right-auto sm:w-80 mt-2 glass-panel bg-slate-900/98 border border-slate-700 rounded-xl shadow-2xl py-2 z-50 text-left backdrop-blur-xl">
+                  <div className="px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                    Other {platform.name} Formats
                   </div>
-                  {allDownloads.map((item, idx) => (
+                  {currentOptions.map((item, idx) => (
                     <a
                       key={idx}
                       href={item.url}
@@ -173,9 +190,9 @@ export const Hero: React.FC = () => {
                         setDropdownOpen(false);
                         document.getElementById('download')?.scrollIntoView({ behavior: 'smooth' });
                       }}
-                      className="w-full text-center text-[11px] text-emerald-400 hover:text-emerald-300 font-medium py-1"
+                      className="w-full text-center text-[11px] text-slate-400 hover:text-emerald-400 transition-colors py-1"
                     >
-                      View all installers & checksums ↓
+                      Need macOS or Linux? View all platforms ↓
                     </button>
                   </div>
                 </div>
