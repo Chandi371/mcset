@@ -1,21 +1,23 @@
 import React from 'react';
-import { Download, Monitor, Apple, Terminal } from 'lucide-react';
+import { Download, Monitor, Apple, Terminal, FileArchive, ExternalLink } from 'lucide-react';
+import { RELEASE_CONFIG } from '../config/releases';
 
 export const DownloadSection: React.FC = () => {
-  const version = 'v0.1.0';
-  const baseUrl = `https://github.com/Chandi371/mcset/releases/download/${version}`;
+  const winArtifacts = RELEASE_CONFIG.artifacts.filter((a) => a.platform === 'windows');
+  const macArtifacts = RELEASE_CONFIG.artifacts.filter((a) => a.platform === 'macos');
+  const linuxArtifacts = RELEASE_CONFIG.artifacts.filter((a) => a.platform === 'linux');
 
   return (
     <section id="download" className="py-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto border-t border-slate-800/80">
       <div className="text-center max-w-3xl mx-auto mb-16">
         <span className="text-xs uppercase font-bold tracking-widest text-emerald-400">
-          Get Started Today
+          Official Release
         </span>
         <h2 className="text-3xl sm:text-4xl font-extrabold text-white mt-1">
-          Download MCSet {version}
+          Download MCSet {RELEASE_CONFIG.version}
         </h2>
-        <p className="mt-4 text-base sm:text-lg text-slate-400">
-          Available for Windows, macOS, and Linux. Choose the installer or portable binary tailored for your operating system.
+        <p className="mt-3 text-base sm:text-lg text-slate-400">
+          Verified desktop binaries for Windows, macOS (Apple Silicon), and Linux.
         </p>
       </div>
 
@@ -36,38 +38,34 @@ export const DownloadSection: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-400 mb-6 leading-relaxed">
-              Standard Windows setup with auto-updating capabilities, desktop shortcuts, and uninstaller.
+              Standard installer with automatic desktop shortcuts, start menu entry, and clean uninstaller.
             </p>
 
             <div className="space-y-2.5">
-              <a
-                href={`${baseUrl}/mcset_0.1.0_x64-setup.exe`}
-                className="w-full py-2.5 px-4 rounded-xl bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold text-xs flex items-center justify-between transition-colors shadow-glow-emerald"
-              >
-                <span>Setup Installer (.exe)</span>
-                <Download className="w-4 h-4" />
-              </a>
-
-              <a
-                href={`${baseUrl}/mcset_0.1.0_x64_en-US.msi`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center justify-between border border-slate-700 transition-colors"
-              >
-                <span>Windows MSI (.msi)</span>
-                <Download className="w-4 h-4 text-slate-400" />
-              </a>
-
-              <a
-                href={`${baseUrl}/mcset.exe`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center justify-between border border-slate-700 transition-colors"
-              >
-                <span>Portable Executable (.exe)</span>
-                <Download className="w-4 h-4 text-slate-400" />
-              </a>
+              {winArtifacts.map((item) => (
+                <a
+                  key={item.id}
+                  href={item.downloadUrl}
+                  className={`w-full py-2.5 px-4 rounded-xl font-medium text-xs flex items-center justify-between transition-colors ${
+                    item.isPrimary
+                      ? 'bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold shadow-glow-emerald'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                  }`}
+                >
+                  <div className="flex flex-col text-left">
+                    <span>{item.label}</span>
+                    <span className={`text-[10px] ${item.isPrimary ? 'text-slate-900/80' : 'text-slate-400'}`}>
+                      {item.sizeFormatted}
+                    </span>
+                  </div>
+                  <Download className={`w-4 h-4 ${item.isPrimary ? 'text-slate-950' : 'text-slate-400'}`} />
+                </a>
+              ))}
             </div>
           </div>
 
           <div className="mt-6 pt-4 border-t border-slate-800/80 text-[11px] text-slate-500">
-            SHA-256 verified release build
+            Prerequisites: 64-bit Windows OS. Java is automatically provisioned if missing.
           </div>
         </div>
 
@@ -87,30 +85,34 @@ export const DownloadSection: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-400 mb-6 leading-relaxed">
-              Native Apple Silicon ARM64 disk image for maximum performance and battery efficiency.
+              Native Apple Silicon ARM64 build for maximum performance on modern Mac hardware.
             </p>
 
             <div className="space-y-2.5">
-              <a
-                href={`${baseUrl}/mcset_0.1.0_aarch64.dmg`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-200 hover:bg-white text-slate-950 font-bold text-xs flex items-center justify-between transition-colors"
-              >
-                <span>Apple Silicon DMG (.dmg)</span>
-                <Download className="w-4 h-4" />
-              </a>
-
-              <a
-                href={`${baseUrl}/mcset.app.tar.gz`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center justify-between border border-slate-700 transition-colors"
-              >
-                <span>App Bundle (.app.tar.gz)</span>
-                <Download className="w-4 h-4 text-slate-400" />
-              </a>
+              {macArtifacts.map((item) => (
+                <a
+                  key={item.id}
+                  href={item.downloadUrl}
+                  className={`w-full py-2.5 px-4 rounded-xl font-medium text-xs flex items-center justify-between transition-colors ${
+                    item.isPrimary
+                      ? 'bg-slate-200 hover:bg-white text-slate-950 font-bold'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                  }`}
+                >
+                  <div className="flex flex-col text-left">
+                    <span>{item.label}</span>
+                    <span className={`text-[10px] ${item.isPrimary ? 'text-slate-900/80' : 'text-slate-400'}`}>
+                      {item.sizeFormatted}
+                    </span>
+                  </div>
+                  <Download className={`w-4 h-4 ${item.isPrimary ? 'text-slate-950' : 'text-slate-400'}`} />
+                </a>
+              ))}
             </div>
           </div>
 
           <div className="mt-6 pt-4 border-t border-slate-800/80 text-[11px] text-slate-500">
-            Requires macOS 11.0 Big Sur or later
+            Requires macOS 11.0 (Big Sur) or newer on Apple Silicon. (Intel x86_64 Macs not built in v0.1.0).
           </div>
         </div>
 
@@ -124,44 +126,40 @@ export const DownloadSection: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-white">Linux</h3>
-                  <p className="text-xs text-slate-400">Ubuntu, Debian, Fedora, Arch</p>
+                  <p className="text-xs text-slate-400">64-bit x86_64 Distributions</p>
                 </div>
               </div>
             </div>
 
             <p className="text-xs text-slate-400 mb-6 leading-relaxed">
-              Standalone AppImage running across all distributions, plus native Debian/Ubuntu and RPM packages.
+              Universal AppImage executable alongside native Debian (.deb) and RedHat (.rpm) packages.
             </p>
 
             <div className="space-y-2.5">
-              <a
-                href={`${baseUrl}/mcset_0.1.0_amd64.AppImage`}
-                className="w-full py-2.5 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs flex items-center justify-between transition-colors"
-              >
-                <span>Universal AppImage (.AppImage)</span>
-                <Download className="w-4 h-4" />
-              </a>
-
-              <a
-                href={`${baseUrl}/mcset_0.1.0_amd64.deb`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center justify-between border border-slate-700 transition-colors"
-              >
-                <span>Debian / Ubuntu Package (.deb)</span>
-                <Download className="w-4 h-4 text-slate-400" />
-              </a>
-
-              <a
-                href={`${baseUrl}/mcset-0.1.0-1.x86_64.rpm`}
-                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs flex items-center justify-between border border-slate-700 transition-colors"
-              >
-                <span>Fedora / RHEL Package (.rpm)</span>
-                <Download className="w-4 h-4 text-slate-400" />
-              </a>
+              {linuxArtifacts.map((item) => (
+                <a
+                  key={item.id}
+                  href={item.downloadUrl}
+                  className={`w-full py-2.5 px-4 rounded-xl font-medium text-xs flex items-center justify-between transition-colors ${
+                    item.isPrimary
+                      ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                  }`}
+                >
+                  <div className="flex flex-col text-left">
+                    <span>{item.label}</span>
+                    <span className={`text-[10px] ${item.isPrimary ? 'text-slate-900/80' : 'text-slate-400'}`}>
+                      {item.sizeFormatted}
+                    </span>
+                  </div>
+                  <Download className={`w-4 h-4 ${item.isPrimary ? 'text-slate-950' : 'text-slate-400'}`} />
+                </a>
+              ))}
             </div>
           </div>
 
           <div className="mt-6 pt-4 border-t border-slate-800/80 text-[11px] text-slate-500">
-            GLIBC 2.31+ or newer supported
+            Prerequisites: GLIBC 2.31+. Ubuntu 22.04+ AppImage requires FUSE (sudo apt install libfuse2).
           </div>
         </div>
       </div>
@@ -175,6 +173,34 @@ export const DownloadSection: React.FC = () => {
         <div className="bg-slate-900 px-3 py-1.5 rounded-lg border border-slate-800 text-emerald-300 select-all overflow-x-auto w-full sm:w-auto">
           chmod +x mcset_0.1.0_amd64.AppImage &amp;&amp; ./mcset_0.1.0_amd64.AppImage
         </div>
+      </div>
+
+      {/* Fallback & Source Code Links */}
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-6 text-xs text-slate-400">
+        <a
+          href={RELEASE_CONFIG.releasesPageUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-emerald-400 flex items-center gap-1.5 transition-colors underline underline-offset-4"
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+          All GitHub Releases &amp; Hashes
+        </a>
+        <a
+          href={RELEASE_CONFIG.sourceZipUrl}
+          className="hover:text-emerald-400 flex items-center gap-1.5 transition-colors underline underline-offset-4"
+        >
+          <FileArchive className="w-3.5 h-3.5" />
+          Download Source Bundle (mcset-v0.1.0-source.zip)
+        </a>
+        <a
+          href={RELEASE_CONFIG.githubRepoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-emerald-400 flex items-center gap-1.5 transition-colors underline underline-offset-4"
+        >
+          Browse GitHub Repository
+        </a>
       </div>
     </section>
   );

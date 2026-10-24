@@ -10,10 +10,10 @@ export const AIAssistantSection: React.FC = () => {
           Model Context Protocol (MCP) Integrated
         </div>
         <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-          An Intelligent AI Server Engineer at Your Side
+          AI-Assisted Diagnostics &amp; Crash Analysis
         </h2>
         <p className="mt-4 text-base sm:text-lg text-slate-400">
-          MCSet integrates natively with modern AI agents via the open Model Context Protocol. Connect your favorite LLM or let the built-in assistant debug issues for you.
+          MCSet exposes standardized Model Context Protocol (MCP) tool endpoints. Inspect server health, diagnose performance bottlenecks, and analyze crash stack traces with strict permission boundaries.
         </p>
       </div>
 
@@ -23,9 +23,9 @@ export const AIAssistantSection: React.FC = () => {
           <div className="w-12 h-12 rounded-xl bg-pink-500/20 border border-pink-500/30 flex items-center justify-center text-pink-400">
             <Cpu className="w-6 h-6" />
           </div>
-          <h3 className="text-lg font-bold text-white">Live Diagnostics</h3>
+          <h3 className="text-lg font-bold text-white">Performance Diagnostics</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
-            Ask questions like <em>"Why is my server lagging at night?"</em>. The assistant examines tick times, chunk generation, entity counts, and garbage collection pauses to isolate bottlenecks.
+            Diagnose server slowdowns by analyzing tick rates (TPS), tick timing (MSPT), memory consumption, and entity counts across active loaded world dimensions.
           </p>
         </div>
 
@@ -34,9 +34,9 @@ export const AIAssistantSection: React.FC = () => {
           <div className="w-12 h-12 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
             <Bug className="w-6 h-6" />
           </div>
-          <h3 className="text-lg font-bold text-white">Instant Crash Analysis</h3>
+          <h3 className="text-lg font-bold text-white">Crash Log Parsing</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
-            When a server crashes, MCSet parses the stack trace, identifies the offending mod, invalid block state, or memory overflow, and explains exactly how to fix it in plain English.
+            When a server encounters an unhandled exception, MCSet parses crash-reports and logs to identify conflicting mod IDs, version mismatches, or corrupted NBT tags.
           </p>
         </div>
 
@@ -45,9 +45,9 @@ export const AIAssistantSection: React.FC = () => {
           <div className="w-12 h-12 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
             <ShieldCheck className="w-6 h-6" />
           </div>
-          <h3 className="text-lg font-bold text-white">Cryptographic Safety</h3>
+          <h3 className="text-lg font-bold text-white">Cryptographic Gating</h3>
           <p className="text-sm text-slate-400 leading-relaxed">
-            Your server is always protected. The AI cannot delete worlds, alter files, or run destructive console commands without issuing a single-use cryptographic approval token for you to confirm.
+            Sensitive operations (such as server deletion or administrative console commands) require user consent via single-use approval tokens with canonical payload hashing to prevent unauthorized execution.
           </p>
         </div>
       </div>

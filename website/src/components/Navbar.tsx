@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Download, Github, Menu, X } from 'lucide-react';
+import { RELEASE_CONFIG } from '../config/releases';
 
 interface NavbarProps {
   onDownloadClick: () => void;
@@ -12,8 +13,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onDownloadClick }) => {
     { name: 'Features', href: '#features' },
     { name: 'Engines', href: '#engines' },
     { name: 'Tunnels', href: '#tunnels' },
-    { name: 'AI Assistant', href: '#ai-assistant' },
-    { name: 'Download', href: '#download' },
+    { name: 'AI Diagnostics', href: '#ai-assistant' },
+    { name: 'Downloads', href: '#download' },
     { name: 'FAQ', href: '#faq' },
   ];
 
@@ -22,15 +23,21 @@ export const Navbar: React.FC<NavbarProps> = ({ onDownloadClick }) => {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo & Brand */}
-          <a href="#" className="flex items-center gap-3 group">
+          <a href="#" className="flex items-center gap-3 group" aria-label="MCSet Home">
             <div className="w-9 h-9 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center p-1.5 shadow-glow-emerald transition-transform group-hover:scale-105">
-              <img src="./icon.png" alt="MCSet Logo" className="w-full h-full object-contain" />
+              <img 
+                src="./icon.png" 
+                alt="MCSet Logo" 
+                width={36} 
+                height={36} 
+                className="w-full h-full object-contain" 
+              />
             </div>
             <div className="flex flex-col">
               <span className="font-extrabold text-lg tracking-tight text-white flex items-center gap-1.5">
                 MCSet
                 <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  v0.1.0
+                  {RELEASE_CONFIG.version}
                 </span>
               </span>
             </div>
@@ -52,7 +59,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onDownloadClick }) => {
           {/* Action Buttons */}
           <div className="hidden sm:flex items-center space-x-3">
             <a
-              href="https://github.com/Chandi371/mcset"
+              href={RELEASE_CONFIG.githubRepoUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg transition-all"
@@ -65,7 +72,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onDownloadClick }) => {
               className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-950 bg-emerald-400 hover:bg-emerald-300 rounded-lg shadow-glow-emerald transition-all transform hover:-translate-y-0.5"
             >
               <Download className="w-4 h-4" />
-              <span>Download Free</span>
+              <span>Download</span>
             </button>
           </div>
 
@@ -74,7 +81,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onDownloadClick }) => {
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-900 border border-slate-800"
-              aria-label="Toggle menu"
+              aria-label="Toggle navigation menu"
+              aria-expanded={mobileMenuOpen}
             >
               {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
@@ -97,7 +105,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onDownloadClick }) => {
           ))}
           <div className="pt-4 border-t border-slate-800 flex flex-col gap-2.5">
             <a
-              href="https://github.com/Chandi371/mcset"
+              href={RELEASE_CONFIG.githubRepoUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center justify-center gap-2 w-full py-2.5 text-sm font-medium text-slate-200 bg-slate-900 border border-slate-700 rounded-lg"
@@ -113,7 +121,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onDownloadClick }) => {
               className="flex items-center justify-center gap-2 w-full py-2.5 text-sm font-semibold text-slate-950 bg-emerald-400 rounded-lg"
             >
               <Download className="w-4 h-4" />
-              Download Free (v0.1.0)
+              Download ({RELEASE_CONFIG.version})
             </button>
           </div>
         </div>

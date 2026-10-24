@@ -9,34 +9,34 @@ export const ZeroPortForwarding: React.FC = () => {
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/30 text-purple-400 text-xs font-semibold uppercase tracking-wider mb-4">
             <Wifi className="w-3.5 h-3.5" />
-            Zero-Port-Forwarding Multiplayer
+            Outbound Tunneling
           </div>
 
           <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight leading-tight">
-            Play with Friends Anywhere Without Router Headaches
+            Multiplayer Without Router Port Forwarding
           </h2>
 
           <p className="mt-4 text-base text-slate-300 leading-relaxed">
-            Hosting a Minecraft server used to require navigating arcane router settings, fighting ISP Carrier-Grade NAT (CGNAT), and exposing your personal home IP address to the internet.
+            Hosting a Minecraft server traditionally requires accessing router administration panels, assigning static local IPs, opening port 25565, or troubleshooting Carrier-Grade NAT (CGNAT) restrictions from your internet service provider.
           </p>
 
           <p className="mt-3 text-base text-slate-400 leading-relaxed">
-            MCSet comes with built-in, verified <strong className="text-purple-300">Portal Tunneling</strong>. Flip one switch, and MCSet establishes a secure outgoing tunnel that generates a public join address your friends can paste into their Minecraft client.
+            MCSet integrates verified <strong className="text-purple-300">Portal raw TCP tunneling</strong>. When activated, MCSet initiates an outbound TCP connection to a relay node, providing an address your friends can enter directly into Minecraft Multiplayer.
           </p>
 
           <div className="mt-8 space-y-3.5">
             {[
               {
-                title: 'Bypasses CGNAT & Strict Firewalls',
-                desc: 'Works on university Wi-Fi, mobile hotspots, and ISPs that block incoming ports.',
+                title: 'Works Behind CGNAT & Standard Home NAT',
+                desc: 'Because connections are outbound to relay nodes, standard incoming port forwarding is not required.',
               },
               {
-                title: 'Keeps Your Home IP Hidden',
-                desc: 'Your private IP address is never revealed to players connecting to your server.',
+                title: 'Protects Home IP Privacy',
+                desc: 'Connecting players resolve and connect through the relay endpoint rather than discovering your residential IP address.',
               },
               {
-                title: 'Cryptographic SHA-256 Verification',
-                desc: 'Tunnel binaries are verified against cryptographic hashes before execution.',
+                title: 'Cryptographic Binary Integrity Verification',
+                desc: 'Portal binaries (v2.6.4) are verified against embedded SHA-256 hashes before execution on Windows, macOS, and Linux.',
               },
             ].map((item, idx) => (
               <div key={idx} className="flex items-start gap-3">
@@ -52,45 +52,44 @@ export const ZeroPortForwarding: React.FC = () => {
 
         {/* Right Column: Visual Comparison */}
         <div className="space-y-4">
-          {/* Old Way Card */}
+          {/* Traditional Setup Card */}
           <div className="p-5 rounded-xl bg-red-950/20 border border-red-500/30">
             <div className="flex items-center gap-2 text-red-400 font-bold text-sm mb-2">
               <ShieldAlert className="w-4 h-4" />
-              The Old, Painful Way
+              Traditional Manual Setup
             </div>
             <ul className="text-xs text-slate-400 space-y-1.5 list-disc list-inside">
               <li>Log in to router admin portal (192.168.1.1)</li>
-              <li>Configure static DHCP leases & open port 25565</li>
-              <li>Fails completely on CGNAT, dorms, and cellular internet</li>
-              <li>Exposes your private home IP address to players</li>
+              <li>Configure static DHCP reservation &amp; open TCP port 25565</li>
+              <li>Often blocked on cellular internet, student housing, and CGNAT</li>
+              <li>Exposes residential IP address to all connecting players</li>
             </ul>
           </div>
 
-          {/* MCSet Way Card */}
+          {/* MCSet Integrated Tunnel Card */}
           <div className="p-6 rounded-2xl bg-gradient-to-br from-purple-950/40 via-slate-900 to-slate-900 border border-purple-500/40 shadow-glow-purple">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2 text-purple-300 font-bold text-sm">
                 <Globe2 className="w-4 h-4" />
-                The MCSet Way
+                MCSet Integrated Portal Tunnel
               </div>
               <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                1-Click Instant
+                1-Click Activation
               </span>
             </div>
 
             <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-2">
               <div className="text-xs text-slate-400 flex items-center justify-between">
-                <span>Tunnel Status</span>
+                <span>Tunnel Protocol</span>
                 <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Active
+                  Raw TCP Relay
                 </span>
               </div>
               <div className="font-mono text-sm sm:text-base text-purple-300 bg-slate-900 p-2.5 rounded-lg border border-purple-500/20 text-center font-bold">
-                smp-friends.portal.sh:25565
+                your-subdomain.portal.sh:25565
               </div>
               <p className="text-[11px] text-slate-500 text-center">
-                Send this address to your friends. They join directly through Multiplayer!
+                Players connect through standard Minecraft Java Edition Multiplayer. Requires active internet access to reach relay nodes.
               </p>
             </div>
           </div>
