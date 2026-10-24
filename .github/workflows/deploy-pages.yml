@@ -1,5 +1,6 @@
 name: Deploy MCSet Showcase to GitHub Pages
 
+# Auto-deploys Vite/React showcase site to GitHub Pages
 on:
   push:
     branches: ["main"]
