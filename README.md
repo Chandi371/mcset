@@ -3,11 +3,12 @@
 > **A modern, lightweight, high-performance Minecraft server manager with native AI assistant integration, built with Tauri 2, Rust, and React.**
 
 [![Latest Release](https://img.shields.io/github/v/release/Chandi371/mcset?color=emerald&logo=github)](https://github.com/Chandi371/mcset/releases/latest)
+[![Showcase Site](https://img.shields.io/badge/Showcase-GitHub%20Pages-emerald?logo=githubpages)](https://chandi371.github.io/mcset/)
 [![Tauri v2](https://img.shields.io/badge/Tauri-v2-blue?logo=tauri)](https://tauri.app/)
 [![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.90+-orange?logo=rust)](https://www.rust-lang.org/)
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows-blue?logo=windows)](https://github.com/Chandi371/mcset/releases)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)](https://github.com/Chandi371/mcset/releases)
 
 ---
 

@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev:website": "npm --prefix website run dev",
+    "build:website": "npm --prefix website run build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
